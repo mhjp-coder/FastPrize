@@ -1,4 +1,5 @@
 import pytest
+from fastlite import database
 
 from fastprize.store import PrizeDrawStore
 
@@ -16,7 +17,8 @@ def test_csv_import_deduplicates_entrants_and_keeps_prize_copies(store):
         "name,organization\nAda Lovelace,Engine Co\n ada lovelace , ENGINE CO \nGrace Hopper,\n",
     )
     prizes = store.import_prizes(
-        event_id, "name,sponsor\nTravel voucher,Northwind\nTravel voucher,Northwind\n"
+        event_id,
+        "prize_name,sponsor\nTravel voucher,Northwind\nTravel voucher,Northwind\n",
     )
 
     assert (entrants.added, entrants.duplicates, entrants.errors) == (2, 1, ())
@@ -29,9 +31,11 @@ def test_csv_import_reports_required_name_errors(store):
 
     missing_column = store.import_entrants(event_id, "organization\nExample Org\n")
     missing_value = store.import_entrants(event_id, "name,organization\n,Example Org\n")
+    missing_prize_column = store.import_prizes(event_id, "sponsor\nNorthwind\n")
 
     assert missing_column.errors == ("CSV must include a name column.",)
     assert missing_value.errors == ("Row 2: name is required.",)
+    assert missing_prize_column.errors == ("CSV must include a prize_name column.",)
 
 
 def test_draw_removes_winner_when_event_setting_is_enabled(store):
@@ -74,3 +78,65 @@ def test_draw_cannot_award_a_prize_twice_or_cross_events(store):
         store.draw(first_event, prize_id)
     with pytest.raises(ValueError, match="not available"):
         store.draw(second_event, prize_id)
+
+
+def test_draw_snapshots_survive_entrant_removal(store):
+    event_id = store.create_event("Awards")
+    preview_entrant = store.add_entrant(event_id, "Ada Lovelace")
+    preview_prize = store.add_prize(event_id, "Laptop")
+    preview = store.preview_draw(
+        event_id,
+        preview_prize,
+        chooser=lambda entrants: entrants[0],
+    )
+    store.save_preview(event_id, preview_prize, preview["winner"], preview["prize"])
+
+    assert store.remove_entrant(event_id, preview_entrant)
+    latest_preview = store.latest_preview(event_id)
+    assert latest_preview["entrant_id"] is None
+    assert latest_preview["entrant_name"] == "Ada Lovelace"
+
+    draw_entrant = store.add_entrant(event_id, "Grace Hopper")
+    draw_prize = store.add_prize(event_id, "Headphones")
+    store.draw(event_id, draw_prize, chooser=lambda entrants: entrants[0])
+
+    assert store.remove_entrant(event_id, draw_entrant)
+    latest_draw = store.latest_draw(event_id)
+    assert latest_draw["entrant_id"] is None
+    assert latest_draw["entrant_name"] == "Grace Hopper"
+
+
+def test_clear_all_event_data_removes_entrants_and_prizes(store):
+    event_id = store.create_event("Data reset")
+    store.add_entrant(event_id, "Ada Lovelace", "Engine Co")
+    store.add_entrant(event_id, "Grace Hopper", "Naval Lab")
+    store.add_prize(event_id, "Laptop", "Northwind")
+    store.add_prize(event_id, "Travel", "Contoso")
+
+    entrants_removed, prizes_removed = store.clear_all_event_data(event_id)
+
+    assert entrants_removed == 2
+    assert prizes_removed == 2
+    assert store.entrants(event_id) == []
+    assert store.prizes(event_id) == []
+
+
+def test_legacy_prize_name_column_is_migrated(tmp_path):
+    db_path = tmp_path / "legacy.sqlite3"
+    legacy_db = database(str(db_path))
+    legacy_db.q(
+        """CREATE TABLE prizes (
+            id INTEGER PRIMARY KEY,
+            event_id INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            sponsor TEXT NOT NULL DEFAULT '',
+            drawn INTEGER NOT NULL DEFAULT 0
+        )"""
+    )
+    legacy_db.t.prizes.insert({"event_id": 1, "name": "Laptop", "sponsor": "Northwind"})
+
+    store = PrizeDrawStore(db_path)
+
+    assert "prize_name" in store.db.t.prizes.columns_dict
+    assert "name" not in store.db.t.prizes.columns_dict
+    assert store.db.t.prizes(as_cls=False)[0]["prize_name"] == "Laptop"

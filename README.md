@@ -9,7 +9,7 @@ uv sync
 uv run fastprize
 ```
 
-Open http://localhost:5001 to manage events. The default SQLite database is `fastprize.sqlite3` in the current working directory. Set `FASTPRIZE_DB_PATH` to use another location.
+Open http://localhost:5001 for the landing page, then choose **Events** to create or select an event. The default SQLite database is `fastprize.sqlite3` in the current working directory. Set `FASTPRIZE_DB_PATH` to use another location.
 
 ## CSV Imports
 

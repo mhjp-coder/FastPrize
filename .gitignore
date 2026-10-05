@@ -1,5 +1,6 @@
 # Python-generated files
 __pycache__/
+.pytest_cache/
 *.py[oc]
 build/
 dist/
@@ -11,4 +12,6 @@ wheels/
 
 # Local runtime data
 fastprize.sqlite3
+fastprize.sqlite3-shm
+fastprize.sqlite3-wal
 .sesskey

@@ -1,0 +1,16 @@
+{
+    "servers": {
+        "mcpdoc-combined": {
+            "type": "stdio",
+            "command": "uvx",
+            "args": [
+                "--with",
+                "mcp<2",
+                "mcpdoc",
+                "--urls",
+                "BeerCSS:https://www.beercss.com/llms.txt",
+                "FastHTML:https://fastht.ml/docs/llms.txt"
+            ]
+        }
+    }
+}

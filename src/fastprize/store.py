@@ -2,12 +2,13 @@ import csv
 import io
 import json
 import secrets
-import sqlite3
-from contextlib import closing
+from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Callable
+
+from apsw import ConstraintError
+from fastlite import database
 
 
 @dataclass(frozen=True)
@@ -20,52 +21,75 @@ class ImportReport:
 class PrizeDrawStore:
     def __init__(self, db_path: str | Path):
         self.db_path = str(db_path)
+        self.db = database(self.db_path)
+        self.db.q("PRAGMA foreign_keys = ON")
         self.initialize()
 
-    def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self.db_path, isolation_level=None)
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA foreign_keys = ON")
-        return connection
-
     def initialize(self) -> None:
-        with closing(self._connect()) as connection:
-            connection.executescript(
-                """
-                CREATE TABLE IF NOT EXISTS events (
-                    id INTEGER PRIMARY KEY,
-                    name TEXT NOT NULL,
-                    remove_winners INTEGER NOT NULL DEFAULT 1
-                );
-                CREATE TABLE IF NOT EXISTS entrants (
-                    id INTEGER PRIMARY KEY,
-                    event_id INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
-                    name TEXT NOT NULL,
-                    organization TEXT NOT NULL DEFAULT '',
-                    identity_key TEXT NOT NULL,
-                    eligible INTEGER NOT NULL DEFAULT 1,
-                    UNIQUE(event_id, identity_key)
-                );
-                CREATE TABLE IF NOT EXISTS prizes (
-                    id INTEGER PRIMARY KEY,
-                    event_id INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
-                    name TEXT NOT NULL,
-                    sponsor TEXT NOT NULL DEFAULT '',
-                    drawn INTEGER NOT NULL DEFAULT 0
-                );
-                CREATE TABLE IF NOT EXISTS draws (
-                    id INTEGER PRIMARY KEY,
-                    event_id INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
-                    entrant_id INTEGER REFERENCES entrants(id) ON DELETE SET NULL,
-                    prize_id INTEGER REFERENCES prizes(id) ON DELETE SET NULL,
-                    entrant_name TEXT NOT NULL,
-                    organization TEXT NOT NULL,
-                    prize_name TEXT NOT NULL,
-                    sponsor TEXT NOT NULL,
-                    created_at TEXT NOT NULL
-                );
-                """
-            )
+        statements = (
+            """CREATE TABLE IF NOT EXISTS events (
+                id INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                remove_winners INTEGER NOT NULL DEFAULT 1
+            )""",
+            """CREATE TABLE IF NOT EXISTS entrants (
+                id INTEGER PRIMARY KEY,
+                event_id INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+                name TEXT NOT NULL,
+                organization TEXT NOT NULL DEFAULT '',
+                identity_key TEXT NOT NULL,
+                eligible INTEGER NOT NULL DEFAULT 1,
+                UNIQUE(event_id, identity_key)
+            )""",
+            """CREATE TABLE IF NOT EXISTS prizes (
+                id INTEGER PRIMARY KEY,
+                event_id INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+                prize_name TEXT NOT NULL,
+                sponsor TEXT NOT NULL DEFAULT '',
+                drawn INTEGER NOT NULL DEFAULT 0
+            )""",
+            """CREATE TABLE IF NOT EXISTS draws (
+                id INTEGER PRIMARY KEY,
+                event_id INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+                entrant_id INTEGER REFERENCES entrants(id) ON DELETE SET NULL,
+                prize_id INTEGER REFERENCES prizes(id) ON DELETE SET NULL,
+                entrant_name TEXT NOT NULL,
+                organization TEXT NOT NULL,
+                prize_name TEXT NOT NULL,
+                sponsor TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )""",
+            """CREATE TABLE IF NOT EXISTS draw_previews (
+                id INTEGER PRIMARY KEY,
+                event_id INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+                prize_id INTEGER REFERENCES prizes(id) ON DELETE CASCADE,
+                entrant_id INTEGER REFERENCES entrants(id) ON DELETE SET NULL,
+                entrant_name TEXT NOT NULL,
+                organization TEXT NOT NULL,
+                prize_name TEXT NOT NULL,
+                sponsor TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE(event_id, prize_id)
+            )""",
+        )
+        for statement in statements:
+            self.db.q(statement)
+        self._migrate_prizes_schema()
+
+    def _migrate_prizes_schema(self) -> None:
+        columns = self.db.t.prizes.columns_dict
+        if "prize_name" not in columns and "name" in columns:
+            self.db.q("ALTER TABLE prizes RENAME COLUMN name TO prize_name")
+
+    @staticmethod
+    def _one(table, where: str, where_args: tuple) -> dict | None:
+        rows = table(
+            where=where,
+            where_args=where_args,
+            limit=1,
+            as_cls=False,
+        )
+        return rows[0] if rows else None
 
     @staticmethod
     def _normalized(value: str) -> str:
@@ -82,57 +106,45 @@ class PrizeDrawStore:
         name = " ".join(name.split())
         if not name:
             raise ValueError("Event name is required")
-        with closing(self._connect()) as connection:
-            cursor = connection.execute(
-                "INSERT INTO events (name, remove_winners) VALUES (?, ?)",
-                (name, int(remove_winners)),
-            )
-            return int(cursor.lastrowid)
+        event = self.db.t.events.insert(
+            {"name": name, "remove_winners": int(remove_winners)}
+        )
+        return event["id"]
 
     def list_events(self) -> list[dict]:
-        with closing(self._connect()) as connection:
-            rows = connection.execute("SELECT * FROM events ORDER BY id DESC")
-            return [dict(row) for row in rows]
+        return self.db.t.events(order_by="id DESC", as_cls=False)
 
     def get_event(self, event_id: int) -> dict | None:
-        with closing(self._connect()) as connection:
-            row = connection.execute(
-                "SELECT * FROM events WHERE id = ?", (event_id,)
-            ).fetchone()
-            return dict(row) if row else None
+        return self._one(self.db.t.events, "id = ?", (event_id,))
 
     def set_remove_winners(self, event_id: int, remove_winners: bool) -> None:
-        with closing(self._connect()) as connection:
-            connection.execute(
-                "UPDATE events SET remove_winners = ? WHERE id = ?",
-                (int(remove_winners), event_id),
-            )
+        self.db.t.events.update({"id": event_id, "remove_winners": int(remove_winners)})
 
     def add_entrant(self, event_id: int, name: str, organization: str = "") -> bool:
         name = " ".join(name.split())
         organization = " ".join(organization.split())
         if not name:
             raise ValueError("Entrant name is required")
-        with closing(self._connect()) as connection:
-            cursor = connection.execute(
-                """INSERT OR IGNORE INTO entrants
-                   (event_id, name, organization, identity_key)
-                   VALUES (?, ?, ?, ?)""",
-                (event_id, name, organization, self._identity_key(name, organization)),
-            )
-            return cursor.rowcount == 1
+        entrant = self.db.t.entrants.insert(
+            {
+                "event_id": event_id,
+                "name": name,
+                "organization": organization,
+                "identity_key": self._identity_key(name, organization),
+            },
+            ignore=True,
+        )
+        return bool(entrant)
 
     def add_prize(self, event_id: int, name: str, sponsor: str = "") -> int:
         name = " ".join(name.split())
         sponsor = " ".join(sponsor.split())
         if not name:
             raise ValueError("Prize name is required")
-        with closing(self._connect()) as connection:
-            cursor = connection.execute(
-                "INSERT INTO prizes (event_id, name, sponsor) VALUES (?, ?, ?)",
-                (event_id, name, sponsor),
-            )
-            return int(cursor.lastrowid)
+        prize = self.db.t.prizes.insert(
+            {"event_id": event_id, "prize_name": name, "sponsor": sponsor}
+        )
+        return prize["id"]
 
     def update_entrant(
         self, event_id: int, entrant_id: int, name: str, organization: str = ""
@@ -142,20 +154,21 @@ class PrizeDrawStore:
         if not name:
             raise ValueError("Entrant name is required")
         try:
-            with closing(self._connect()) as connection:
-                cursor = connection.execute(
-                    """UPDATE entrants SET name = ?, organization = ?, identity_key = ?
-                       WHERE event_id = ? AND id = ?""",
-                    (
-                        name,
-                        organization,
-                        self._identity_key(name, organization),
-                        event_id,
-                        entrant_id,
-                    ),
-                )
-                return cursor.rowcount == 1
-        except sqlite3.IntegrityError as error:
+            entrant = self._one(
+                self.db.t.entrants,
+                "event_id = ? AND id = ?",
+                (event_id, entrant_id),
+            )
+            if entrant is None:
+                return False
+            entrant.update(
+                name=name,
+                organization=organization,
+                identity_key=self._identity_key(name, organization),
+            )
+            self.db.t.entrants.update(entrant)
+            return True
+        except ConstraintError as error:
             raise ValueError(
                 "An entrant with that name and organization already exists"
             ) from error
@@ -167,13 +180,16 @@ class PrizeDrawStore:
         sponsor = " ".join(sponsor.split())
         if not name:
             raise ValueError("Prize name is required")
-        with closing(self._connect()) as connection:
-            cursor = connection.execute(
-                """UPDATE prizes SET name = ?, sponsor = ?
-                   WHERE event_id = ? AND id = ? AND drawn = 0""",
-                (name, sponsor, event_id, prize_id),
-            )
-            return cursor.rowcount == 1
+        prize = self._one(
+            self.db.t.prizes,
+            "event_id = ? AND id = ? AND drawn = 0",
+            (event_id, prize_id),
+        )
+        if prize is None:
+            return False
+        prize.update(prize_name=name, sponsor=sponsor)
+        self.db.t.prizes.update(prize)
+        return True
 
     def import_entrants(self, event_id: int, content: str) -> ImportReport:
         return self._import_csv(event_id, content, "organization", entrants=True)
@@ -189,8 +205,10 @@ class PrizeDrawStore:
             headers = {
                 header.strip().casefold() for header in (reader.fieldnames or [])
             }
-            if "name" not in headers:
-                return ImportReport(0, 0, ("CSV must include a name column.",))
+            required_header = "name" if entrants else "prize_name"
+            if required_header not in headers:
+                label = "name" if entrants else "prize_name"
+                return ImportReport(0, 0, (f"CSV must include a {label} column.",))
 
             added = 0
             duplicates = 0
@@ -200,12 +218,12 @@ class PrizeDrawStore:
                     (key or "").strip().casefold(): (value or "").strip()
                     for key, value in row.items()
                 }
-                name = values.get("name", "")
+                name = values.get(required_header, "")
                 optional_value = values.get(optional_column, "")
                 if not any(values.values()):
                     continue
                 if not name:
-                    errors.append(f"Row {line_number}: name is required.")
+                    errors.append(f"Row {line_number}: {required_header} is required.")
                     continue
                 if entrants:
                     if self.add_entrant(event_id, name, optional_value):
@@ -220,36 +238,91 @@ class PrizeDrawStore:
             return ImportReport(0, 0, (f"Could not read CSV: {error}",))
 
     def entrants(self, event_id: int) -> list[dict]:
-        with closing(self._connect()) as connection:
-            rows = connection.execute(
-                "SELECT * FROM entrants WHERE event_id = ? ORDER BY name COLLATE NOCASE",
-                (event_id,),
-            )
-            return [dict(row) for row in rows]
+        return self.db.t.entrants(
+            where="event_id = ?",
+            where_args=(event_id,),
+            order_by="name COLLATE NOCASE",
+            as_cls=False,
+        )
 
     def prizes(self, event_id: int) -> list[dict]:
-        with closing(self._connect()) as connection:
-            rows = connection.execute(
-                "SELECT * FROM prizes WHERE event_id = ? ORDER BY drawn, id",
-                (event_id,),
-            )
-            return [dict(row) for row in rows]
+        return self.db.t.prizes(
+            where="event_id = ?",
+            where_args=(event_id,),
+            order_by="drawn, id",
+            as_cls=False,
+        )
 
     def remove_entrant(self, event_id: int, entrant_id: int) -> bool:
-        with closing(self._connect()) as connection:
-            cursor = connection.execute(
-                "DELETE FROM entrants WHERE event_id = ? AND id = ?",
-                (event_id, entrant_id),
-            )
-            return cursor.rowcount == 1
+        entrant = self._one(
+            self.db.t.entrants,
+            "event_id = ? AND id = ?",
+            (event_id, entrant_id),
+        )
+        if entrant is None:
+            return False
+        self.db.t.entrants.delete(entrant_id)
+        return True
 
     def remove_prize(self, event_id: int, prize_id: int) -> bool:
-        with closing(self._connect()) as connection:
-            cursor = connection.execute(
-                "DELETE FROM prizes WHERE event_id = ? AND id = ? AND drawn = 0",
-                (event_id, prize_id),
-            )
-            return cursor.rowcount == 1
+        prize = self._one(
+            self.db.t.prizes,
+            "event_id = ? AND id = ? AND drawn = 0",
+            (event_id, prize_id),
+        )
+        if prize is None:
+            return False
+        self.db.t.prizes.delete(prize_id)
+        return True
+
+    def clear_entrants(self, event_id: int) -> int:
+        entrants = self.entrants(event_id)
+        self.db.t.entrants.delete_where(
+            "event_id = ?",
+            (event_id,),
+        )
+        return len(entrants)
+
+    def clear_prizes(self, event_id: int) -> int:
+        prizes = self.prizes(event_id)
+        self.db.t.prizes.delete_where(
+            "event_id = ?",
+            (event_id,),
+        )
+        return len(prizes)
+
+    def clear_all_event_data(self, event_id: int) -> tuple[int, int]:
+        self.db.t.draw_previews.delete_where(
+            "event_id = ?",
+            (event_id,),
+        )
+        return self.clear_entrants(event_id), self.clear_prizes(event_id)
+
+    def preview_draw(
+        self,
+        event_id: int,
+        prize_id: int,
+        chooser: Callable[[list[dict]], dict] = secrets.choice,
+    ) -> dict:
+        event = self.get_event(event_id)
+        prize = self._one(
+            self.db.t.prizes,
+            "id = ? AND event_id = ? AND drawn = 0",
+            (prize_id, event_id),
+        )
+        entrants = self.db.t.entrants(
+            where="event_id = ? AND eligible = 1",
+            where_args=(event_id,),
+            as_cls=False,
+        )
+        if event is None:
+            raise ValueError("Event not found")
+        if prize is None:
+            raise ValueError("Prize is not available for this event")
+        if not entrants:
+            raise ValueError("There are no eligible entrants")
+        winner = chooser(entrants)
+        return {"winner": winner, "prize": prize}
 
     def draw(
         self,
@@ -257,69 +330,90 @@ class PrizeDrawStore:
         prize_id: int,
         chooser: Callable[[list[dict]], dict] = secrets.choice,
     ) -> dict:
-        with closing(self._connect()) as connection:
-            connection.execute("BEGIN IMMEDIATE")
-            event = connection.execute(
-                "SELECT * FROM events WHERE id = ?", (event_id,)
-            ).fetchone()
-            prize = connection.execute(
-                "SELECT * FROM prizes WHERE id = ? AND event_id = ? AND drawn = 0",
-                (prize_id, event_id),
-            ).fetchone()
-            entrants = [
-                dict(row)
-                for row in connection.execute(
-                    "SELECT * FROM entrants WHERE event_id = ? AND eligible = 1",
-                    (event_id,),
-                )
-            ]
+        preview = self.preview_draw(event_id, prize_id, chooser)
+        winner = preview["winner"]
+        prize = preview["prize"]
+        with self.db.conn:
+            event = self.get_event(event_id)
             if event is None:
                 raise ValueError("Event not found")
-            if prize is None:
-                raise ValueError("Prize is not available for this event")
-            if not entrants:
-                raise ValueError("There are no eligible entrants")
-
-            winner = chooser(entrants)
-            created_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
-            cursor = connection.execute(
-                """INSERT INTO draws
-                   (event_id, entrant_id, prize_id, entrant_name, organization,
-                    prize_name, sponsor, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    event_id,
-                    winner["id"],
-                    prize_id,
-                    winner["name"],
-                    winner["organization"],
-                    prize["name"],
-                    prize["sponsor"],
-                    created_at,
-                ),
+            available_prize = self._one(
+                self.db.t.prizes,
+                "id = ? AND event_id = ? AND drawn = 0",
+                (prize_id, event_id),
             )
-            connection.execute("UPDATE prizes SET drawn = 1 WHERE id = ?", (prize_id,))
+            if available_prize is None:
+                raise ValueError("Prize is not available for this event")
+            created_at = datetime.now(UTC).isoformat(timespec="microseconds")
+            draw = self.db.t.draws.insert(
+                {
+                    "event_id": event_id,
+                    "entrant_id": winner["id"],
+                    "prize_id": prize_id,
+                    "entrant_name": winner["name"],
+                    "organization": winner["organization"],
+                    "prize_name": prize["prize_name"],
+                    "sponsor": prize["sponsor"],
+                    "created_at": created_at,
+                }
+            )
+            self.db.t.draw_previews.delete_where(
+                "event_id = ? AND prize_id = ?",
+                (event_id, prize_id),
+            )
+            self.db.t.prizes.update({"id": prize_id, "drawn": 1})
             if event["remove_winners"]:
-                connection.execute(
-                    "UPDATE entrants SET eligible = 0 WHERE id = ?", (winner["id"],)
-                )
-            draw = connection.execute(
-                "SELECT * FROM draws WHERE id = ?", (cursor.lastrowid,)
-            ).fetchone()
-            connection.commit()
-            return dict(draw)
+                self.db.t.entrants.update({"id": winner["id"], "eligible": 0})
+            return draw
 
     def draw_history(self, event_id: int) -> list[dict]:
-        with closing(self._connect()) as connection:
-            rows = connection.execute(
-                "SELECT * FROM draws WHERE event_id = ? ORDER BY id DESC", (event_id,)
-            )
-            return [dict(row) for row in rows]
+        return self.db.t.draws(
+            where="event_id = ?",
+            where_args=(event_id,),
+            order_by="id DESC",
+            as_cls=False,
+        )
 
     def latest_draw(self, event_id: int) -> dict | None:
-        with closing(self._connect()) as connection:
-            row = connection.execute(
-                "SELECT * FROM draws WHERE event_id = ? ORDER BY id DESC LIMIT 1",
-                (event_id,),
-            ).fetchone()
-            return dict(row) if row else None
+        draws = self.db.t.draws(
+            where="event_id = ?",
+            where_args=(event_id,),
+            order_by="id DESC",
+            limit=1,
+            as_cls=False,
+        )
+        return draws[0] if draws else None
+
+    def save_preview(
+        self, event_id: int, prize_id: int, winner: dict, prize: dict
+    ) -> dict:
+        created_at = datetime.now(UTC).isoformat(timespec="microseconds")
+        preview = self._one(
+            self.db.t.draw_previews,
+            "event_id = ? AND prize_id = ?",
+            (event_id, prize_id),
+        )
+        row = {
+            "event_id": event_id,
+            "prize_id": prize_id,
+            "entrant_id": winner["id"],
+            "entrant_name": winner["name"],
+            "organization": winner["organization"],
+            "prize_name": prize["prize_name"],
+            "sponsor": prize["sponsor"],
+            "created_at": created_at,
+        }
+        if preview is None:
+            return self.db.t.draw_previews.insert(row)
+        preview.update(row)
+        return self.db.t.draw_previews.update(preview)
+
+    def latest_preview(self, event_id: int) -> dict | None:
+        previews = self.db.t.draw_previews(
+            where="event_id = ?",
+            where_args=(event_id,),
+            order_by="id DESC",
+            limit=1,
+            as_cls=False,
+        )
+        return previews[0] if previews else None
