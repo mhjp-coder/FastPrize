@@ -1,84 +1,150 @@
-from fasthtml.common import H1, H2, Button, Div, Form, Input, Label, P, Small
-from starlette.exceptions import HTTPException
-from starlette.requests import Request
+import json
+
+from fasthtml.common import (
+    H1,
+    H2,
+    Button,
+    Div,
+    Fieldset,
+    Form,
+    HTTPException,
+    I,
+    Input,
+    Legend,
+    P,
+    Request,
+    Small,
+    Span,
+)
 
 from fastprize.ui import document, redirect_event, status_message
 
 
 def register_routes(rt, store):
-    @rt("/events/{event_id}/import")
-    def import_page(event_id: int, status: str = ""):
+    @rt("/events/{event_id}/import", methods=["GET", "POST"])
+    async def import_page(event_id: int, req: Request, status: str = ""):
         event = store.get_event(event_id)
         if event is None:
             raise HTTPException(status_code=404)
+        if req.method == "POST":
+            form = await req.form()
+            return await process_uploads(
+                event_id,
+                {
+                    "entrants": form.get("entrants_file"),
+                    "prizes": form.get("prizes_file"),
+                },
+            )
         message = status_message(status)
         return document(
             f"FastPrize | {event['name']} | Import",
             Div(
-                Div("EVENT DATA", class_="eyebrow"),
-                H1("Import CSV"),
+                Div("EVENT DATA", cls="upper small-text secondary-text"),
+                H1("Import CSV", cls="small"),
                 P(f"Load entrants and prizes into {event['name']}."),
-                class_="page-intro",
+                cls="vertical",
             ),
-            P(message, class_="notice") if message else "",
-            Div(
-                Div(
-                    H2("Entrants"),
-                    Small("Import names and organizations."),
-                    Form(
-                        Input(
-                            type="file",
-                            name="file",
-                            accept=".csv,text/csv",
-                            required=True,
+            P(message, cls="tertiary-container padding") if message else "",
+            Form(
+                Fieldset(
+                    Legend("Select CSV files"),
+                    Div(
+                        Div(
+                            H2("Entrants", cls="small"),
+                            Small("Import names and organizations."),
+                            Button(
+                                I("attach_file"),
+                                Span("Entrants CSV"),
+                                type="button",
+                                onclick="this.nextElementSibling.click()",
+                                cls="secondary",
+                            ),
+                            Input(
+                                type="file",
+                                name="entrants_file",
+                                accept=".csv,text/csv",
+                                hidden=True,
+                                onchange="this.previousElementSibling.querySelector('span').textContent = this.files[0].name",
+                            ),
+                            cls="s12 m6 l6 vertical",
                         ),
-                        Button("Import entrants", type="submit", class_="secondary"),
-                        action=f"/events/{event_id}/entrants/import",
-                        method="post",
-                        enctype="multipart/form-data",
-                        class_="import-form",
-                    ),
-                ),
-                Div(
-                    H2("Prizes"),
-                    Small("Import prize names and sponsors."),
-                    Form(
-                        Input(
-                            type="file",
-                            name="file",
-                            accept=".csv,text/csv",
-                            required=True,
+                        Div(
+                            H2("Prizes", cls="small"),
+                            Small("Import prize names and sponsors."),
+                            Button(
+                                I("attach_file"),
+                                Span("Prizes CSV"),
+                                type="button",
+                                onclick="this.nextElementSibling.click()",
+                                cls="secondary",
+                            ),
+                            Input(
+                                type="file",
+                                name="prizes_file",
+                                accept=".csv,text/csv",
+                                hidden=True,
+                                onchange="this.previousElementSibling.querySelector('span').textContent = this.files[0].name",
+                            ),
+                            cls="s12 m6 l6 vertical",
                         ),
-                        Button("Import prizes", type="submit", class_="secondary"),
-                        action=f"/events/{event_id}/prizes/import",
-                        method="post",
-                        enctype="multipart/form-data",
-                        class_="import-form",
+                        cls="grid",
                     ),
+                    Button("Import selected files", type="submit", cls="primary"),
+                    cls="vertical",
                 ),
-                class_="import-grid",
+                action=f"/events/{event_id}/import",
+                method="post",
+                enctype="multipart/form-data",
+                cls="vertical",
             ),
             event_id=event_id,
             event_name=event["name"],
             active_link="import",
         )
 
+    async def process_uploads(event_id: int, uploads):
+        contents = {}
+        for kind, upload in uploads.items():
+            if upload is None or not getattr(upload, "filename", ""):
+                continue
+            try:
+                contents[kind] = (await upload.read()).decode("utf-8-sig")
+            except UnicodeDecodeError:
+                return redirect_event(event_id, "invalid-encoding", "import")
+
+        if not contents:
+            return redirect_event(event_id, "no-file", "import")
+
+        reports = {}
+        for kind, content in contents.items():
+            if kind == "entrants":
+                reports[kind] = store.import_entrants(event_id, content)
+            else:
+                reports[kind] = store.import_prizes(event_id, content)
+
+        if len(reports) == 1:
+            kind, report = next(iter(reports.items()))
+            if kind == "entrants":
+                status = f"entrants-imported:{report.added}:{report.duplicates}:{len(report.errors)}:{'; '.join(report.errors[:3])}"
+            else:
+                status = f"prizes-imported:{report.added}:0:{len(report.errors)}:{'; '.join(report.errors[:3])}"
+        else:
+            status = "imports-completed:" + json.dumps(
+                {
+                    kind: {
+                        "added": report.added,
+                        "duplicates": report.duplicates,
+                        "errors": report.errors[:3],
+                    }
+                    for kind, report in reports.items()
+                },
+                separators=(",", ":"),
+            )
+        return redirect_event(event_id, status, "import")
+
     async def import_csv(event_id: int, req: Request, kind: str):
         form = await req.form()
-        upload = form.get("file")
-        if upload is None or not getattr(upload, "filename", ""):
-            return redirect_event(event_id, "no-file", "import")
-        try:
-            content = (await upload.read()).decode("utf-8-sig")
-        except UnicodeDecodeError:
-            return redirect_event(event_id, "invalid-encoding", "import")
-        if kind == "entrants":
-            report = store.import_entrants(event_id, content)
-            status = f"entrants-imported:{report.added}:{report.duplicates}:{len(report.errors)}:{'; '.join(report.errors[:3])}"
-        else:
-            report = store.import_prizes(event_id, content)
-            status = f"prizes-imported:{report.added}:0:{len(report.errors)}:{'; '.join(report.errors[:3])}"
-        return redirect_event(event_id, status, "import")
+        return await process_uploads(event_id, {kind: form.get("file")})
 
     @rt("/events/{event_id}/entrants/import", methods=["POST"])
     async def import_entrants(event_id: int, req: Request):

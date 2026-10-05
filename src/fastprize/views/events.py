@@ -2,21 +2,20 @@ from fasthtml.common import (
     H1,
     H2,
     A,
+    Article,
     Button,
     Div,
     Form,
-    Img,
+    HTTPException,
     Input,
     Option,
     P,
+    RedirectResponse,
+    Request,
     Section,
     Select,
-    Span,
     Strong,
 )
-from starlette.exceptions import HTTPException
-from starlette.requests import Request
-from starlette.responses import RedirectResponse
 
 from fastprize.ui import (
     EVENT_SELECTION_COOKIE,
@@ -41,41 +40,85 @@ def register_routes(rt, store):
     @rt("/")
     def home(req: Request):
         selected_event = _selected_event(req, store)
-        return document(
-            "FastPrize | Home",
-            Section(
-                Img(
-                    src="https://images.unsplash.com/photo-1540575467063-178a50c2df87?auto=format&fit=crop&w=2200&q=85",
-                    alt="A lively conference crowd gathered for a stage event",
-                    style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;",
+        available_events = store.list_events()
+        event_links = [
+            Article(
+                A(
+                    H2(event["name"], cls="small"),
+                    href=f"/events/{event['id']}",
+                    cls="link responsive center-align",
                 ),
-                Div(style="position:absolute;inset:0;background:rgba(17,34,36,.52);"),
+                cls="s12 m6 l4 card padding small-round",
+            )
+            for event in available_events
+        ]
+        selected_panel = None
+        if selected_event:
+            entrants = store.entrants(selected_event["id"])
+            prizes = store.prizes(selected_event["id"])
+            eligible_count = sum(entrant["eligible"] for entrant in entrants)
+            available_count = sum(not prize["drawn"] for prize in prizes)
+            selected_panel = Section(
+                Article(
+                    Div(
+                        Div("CURRENT EVENT", cls="upper small-text secondary-text"),
+                        H2(selected_event["name"], cls="small"),
+                        P("Your draw desk is ready."),
+                    ),
+                    Div(
+                        A(
+                            "Open workspace",
+                            href=f"/events/{selected_event['id']}",
+                            cls="primary",
+                        ),
+                        A(
+                            "Open projector display",
+                            href=f"/events/{selected_event['id']}/display",
+                            cls="tertiary",
+                        ),
+                        cls="horizontal",
+                    ),
+                    cls="card padding primary-container small-round",
+                ),
                 Div(
-                    P(
-                        "THE RAFFLE, WITHOUT THE FISHBOWL",
-                        style="font-size:14px;font-weight:700;letter-spacing:1px;",
+                    Article(
+                        P(Strong(str(eligible_count))),
+                        P("eligible entrants"),
+                        cls="s6 m6 l6 card padding small-round",
                     ),
-                    H1(
-                        "FastPrize",
-                        style="font-family:Georgia,serif;font-size:62px;line-height:1.05;margin:16px 0;",
+                    Article(
+                        P(Strong(str(available_count))),
+                        P("prizes available"),
+                        cls="s6 m6 l6 card padding small-round",
                     ),
-                    P(
-                        "No folded slips. No suspiciously convenient hand in the bowl. Just one very surprised winner.",
-                        style="font-size:21px;line-height:1.45;max-width:620px;",
-                    ),
-                    A(
-                        "See the events",
-                        href="/events",
-                        class_="button",
-                        style="margin-top:20px;",
-                    ),
-                    style="position:relative;z-index:1;max-width:720px;",
+                    cls="grid",
                 ),
-                style="position:relative;isolation:isolate;display:flex;align-items:center;min-height:72vh;overflow:hidden;padding:48px 32px;color:white;background:#183f40;",
+            )
+        return document(
+            "FastPrize | Draw desk",
+            Div(
+                Div("DRAW OPERATIONS", cls="upper small-text secondary-text"),
+                H1("The draw desk", cls="small"),
+                P(
+                    "No folded slips. No guesswork. Keep every event, entrant, prize, and result in view."
+                ),
+                cls="vertical",
             ),
-            P(
-                "Confetti optional. Suspiciously good luck is not.",
-                style="font-family:Georgia,serif;font-size:22px;padding:16px 8px;",
+            selected_panel
+            or P(
+                "Choose an event to open its workspace, or create one to get started.",
+                cls="surface-variant padding",
+            ),
+            Section(
+                Div(
+                    H2("Your events", cls="small"),
+                    A("Manage events", href="/events", cls="link"),
+                    cls="horizontal middle-align",
+                ),
+                Div(*event_links, cls="grid")
+                if event_links
+                else A("Create your first event", href="/events", cls="primary"),
+                cls="vertical",
             ),
             event_id=selected_event["id"] if selected_event else None,
             event_name=selected_event["name"] if selected_event else None,
@@ -86,39 +129,44 @@ def register_routes(rt, store):
         selected_event = _selected_event(req, store)
         events = store.list_events()
         event_links = [
-            A(
-                Div(Strong(event["name"]), Span("Open event workspace")),
-                Span("Open"),
-                href=f"/events/{event['id']}",
-                class_="event-link",
+            Article(
+                A(
+                    H2(event["name"], cls="small"),
+                    href=f"/events/{event['id']}",
+                    cls="link responsive center-align",
+                ),
+                cls="s12 m6 l4 card padding small-round",
             )
             for event in events
         ]
         return document(
             "FastPrize | Events",
             Div(
-                Div("EVENTS", class_="eyebrow"),
-                H1("Choose your event."),
+                Div("EVENTS", cls="upper small-text secondary-text"),
+                H1("Choose your event.", cls="small"),
                 P("Pick up where the suspense left off, or start a new one."),
-                class_="page-intro",
+                cls="vertical",
             ),
             Section(
-                H2("Your events"),
-                Div(*event_links, class_="event-grid")
+                H2("Your events", cls="small"),
+                Div(*event_links, cls="grid")
                 if event_links
                 else P(
                     "No events yet. Create one to start adding entrants and prizes.",
-                    class_="empty",
+                    cls="surface-variant padding",
                 ),
             ),
             Form(
                 Input(
-                    name="name", placeholder="Conference or event name", required=True
+                    name="name",
+                    placeholder="Conference or event name",
+                    required=True,
+                    type="text",
                 ),
-                Button("Create event", type="submit"),
+                Button("Create event", type="submit", cls="s12 m3 l2 primary"),
                 action="/events",
                 method="post",
-                class_="create-event",
+                cls="grid",
             ),
             event_id=selected_event["id"] if selected_event else None,
             event_name=selected_event["name"] if selected_event else None,
@@ -146,21 +194,21 @@ def register_routes(rt, store):
         return document(
             f"FastPrize | {event['name']} | Events",
             Div(
-                Div("EVENT MANAGEMENT", class_="eyebrow"),
-                H1(event["name"]),
+                Div("EVENT MANAGEMENT", cls="upper small-text secondary-text"),
+                H1(event["name"], cls="small"),
                 P(
                     f"{eligible_count} eligible entrants | {available_count} prizes available"
                 ),
-                class_="event-heading",
+                cls="vertical",
             ),
-            P(message, class_="notice") if message else "",
+            P(message, cls="tertiary-container padding") if message else "",
             A(
                 "Open projector display",
                 href=f"/events/{event_id}/display",
-                class_="button display-link",
+                cls="tertiary",
             ),
             Section(
-                H2("Winner eligibility"),
+                H2("Winner eligibility", cls="small"),
                 P("Choose whether winners can be selected again."),
                 Form(
                     Select(
@@ -176,30 +224,32 @@ def register_routes(rt, store):
                         ),
                         name="remove_winners",
                         id="remove_winners",
+                        cls="s12 m8 l8",
                     ),
-                    Button("Save setting", type="submit", class_="secondary"),
+                    Button("Save setting", type="submit", cls="s12 m4 l4 primary"),
                     action=f"/events/{event_id}/settings",
                     method="post",
+                    cls="grid",
                 ),
-                class_="section",
+                cls="vertical",
             ),
             Section(
-                H2("Data management"),
+                H2("Data management", cls="small"),
                 P("Remove all entrants and prizes from this event."),
                 Form(
                     Button(
                         "Clear all entrants and prizes",
                         type="submit",
-                        class_="danger",
+                        cls="error",
                     ),
                     action=f"/events/{event_id}/clear-data",
                     method="post",
                 ),
-                class_="section",
+                cls="vertical",
             ),
             event_id=event_id,
             event_name=event["name"],
-            active_link="events",
+            active_link="overview",
         )
 
     @rt("/events/{event_id}/settings", methods=["POST"])

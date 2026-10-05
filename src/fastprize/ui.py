@@ -1,32 +1,32 @@
+import json
 from urllib.parse import quote
 
 from fasthtml.common import (
-    A,
-    Aside,
-    Body,
-    Button,
-    Div,
-    Form,
     H1,
     H2,
+    A,
+    Body,
+    Button,
+    Dialog,
+    Div,
+    Form,
     Head,
+    Header,
     Html,
+    I,
     Input,
-    Li,
     Link,
     Main,
     Meta,
     Nav,
     P,
+    RedirectResponse,
     Script,
-    Small,
     Span,
     Strong,
     Title,
     Ul,
 )
-from starlette.responses import RedirectResponse
-
 
 EVENT_SELECTION_COOKIE = "fastprize_event_id"
 
@@ -63,6 +63,27 @@ def redirect_event(event_id: int, status: str, page: str = "events"):
 
 
 def status_message(status: str) -> str:
+    if status.startswith("imports-completed:"):
+        reports = json.loads(status.removeprefix("imports-completed:"))
+        imported = []
+        if "entrants" in reports:
+            added = reports["entrants"]["added"]
+            imported.append(f"{added} entrant{'s' if added != 1 else ''}")
+        if "prizes" in reports:
+            added = reports["prizes"]["added"]
+            imported.append(f"{added} prize{'s' if added != 1 else ''}")
+        message = f"Imported {' and '.join(imported)}"
+        if "entrants" in reports:
+            duplicates = reports["entrants"]["duplicates"]
+            message += (
+                f"; {duplicates} duplicate entrant row"
+                f"{'s' if duplicates != 1 else ''} skipped"
+            )
+        errors = [error for report in reports.values() for error in report["errors"]]
+        message += f"; {len(errors)} invalid row{'s' if len(errors) != 1 else ''}."
+        if errors:
+            message += " " + "; ".join(errors)
+        return message
     if status.startswith(("entrants-imported:", "prizes-imported:")):
         kind, added, duplicates, error_count, *details = status.split(":", 4)
         label = "entrant" if kind == "entrants-imported" else "prize"
@@ -85,43 +106,74 @@ def document(
     event_name: str | None = None,
     active_link: str = "",
 ):
-    page_links = [
-        ("Events", "events", "/events"),
-        ("Import", "import", "/import"),
-        ("Entrants", "entrants", "/entrants"),
-        ("Prizes", "prizes", "/prizes"),
-        ("Draw", "draw", "/draw"),
-        ("Draw history", "history", "/history"),
-    ]
-    navigation = []
-    for label, key, suffix in page_links:
-        if event_id is None and key != "events":
-            continue
-        href = suffix if key == "events" else f"/events/{event_id}{suffix}"
-        navigation.append(
-            Li(
-                A(
-                    label,
-                    href=href,
-                    aria_current="page" if active_link == key else None,
-                )
+    if screen:
+        body_content = (Main(*content, cls="responsive center-align padding"),)
+        body_class = "dark compact"
+    else:
+        page_links = [("All events", "events", "/events", "calendar_month")]
+        if event_id is not None:
+            page_links.extend(
+                [
+                    ("Overview", "overview", f"/events/{event_id}", "dashboard"),
+                    ("Entrants", "entrants", f"/events/{event_id}/entrants", "groups"),
+                    ("Prizes", "prizes", f"/events/{event_id}/prizes", "redeem"),
+                    (
+                        "Import CSV",
+                        "import",
+                        f"/events/{event_id}/import",
+                        "upload_file",
+                    ),
+                    ("Draw", "draw", f"/events/{event_id}/draw", "casino"),
+                    (
+                        "Draw history",
+                        "history",
+                        f"/events/{event_id}/history",
+                        "history",
+                    ),
+                ]
             )
+        navigation = [
+            A(
+                I(icon),
+                label,
+                href=href,
+                cls="active" if active_link == key else None,
+                aria_current="page" if active_link == key else None,
+            )
+            for label, key, href, icon in page_links
+        ]
+        brand = A(
+            I("casino"),
+            Strong("FastPrize"),
+            href="/",
         )
-    body_content = (
-        content
-        if screen
-        else (
-            Div(
-                Aside(
-                    A(Strong("F"), " FastPrize", href="/"),
-                    P(event_name or "Workspace"),
-                    Nav(Ul(*navigation)),
+        body_content = (
+            Nav(
+                brand,
+                P("CURRENT EVENT", cls="upper small-text"),
+                Strong(event_name or "Choose an event"),
+                P("WORKSPACE", cls="upper small-text"),
+                Div(
+                    *navigation,
+                    cls="vertical",
                 ),
-                Main(*content),
-                class_="grid",
+                cls="left m l vertical padding",
             ),
+            Nav(
+                brand,
+                A(I("calendar_month"), "Events", href="/events"),
+                cls="top s",
+            ),
+            Header(
+                Div(
+                    P("WORKSPACE", cls="upper small-text"),
+                    Strong(event_name or "Prize draw operations"),
+                ),
+                A("All events", href="/events", cls="link"),
+            ),
+            Main(*content, cls="responsive"),
         )
-    )
+        body_class = "light compact"
     return Html(
         Head(
             Meta(charset="utf-8"),
@@ -136,63 +188,61 @@ def document(
                 type="module",
             ),
         ),
-        Body(*body_content, class_="screen" if screen else "app"),
+        Body(*body_content, cls=body_class),
     )
 
 
 def record_list(records: list[dict], empty_message: str, render_record):
     if not records:
-        return P(empty_message, class_="empty")
-    return Div(*(render_record(record) for record in records), class_="record-list")
+        return P(empty_message, cls="surface-variant padding")
+    return Ul(*(render_record(record) for record in records), cls="border no-space")
 
 
 def winner_fragment(draw: dict | None):
     if draw is None:
         return Div(
-            P("The next name could be yours.", class_="screen-idle"),
+            P("The next name could be yours.", cls="large-text center-align"),
             id="live-result",
-            **{"data-draw-id": ""},
+            data_draw_id="",
         )
     return Div(
-        Div("The winner is", class_="eyebrow"),
-        H1(draw["entrant_name"], class_="winner-name"),
-        P(draw["organization"] or "", class_="winner-org"),
+        P("The winner is", cls="upper small-text tertiary-text center-align"),
+        H1(draw["entrant_name"], cls="center-align"),
+        P(draw["organization"] or "", cls="medium-text center-align"),
         Div(
             Strong(draw["prize_name"]),
             Span("from"),
             Strong(draw["sponsor"] or "our conference sponsors"),
-            class_="award-line",
+            cls="horizontal center-align",
         ),
         id="live-result",
-        **{"data-draw-id": str(draw["id"])},
-        **{"data-result-version": draw["created_at"]},
+        data_draw_id=str(draw["id"]),
+        data_result_version=draw["created_at"],
     )
 
 
 def draw_preview_modal(
     event_id: int, prize_id: int, winner_id: int, prize: dict, winner: dict
 ):
-    return Div(
-        Div(
-            H2("Confirm draw"),
-            P(
-                f"{winner['name']} from {winner['organization'] or 'an unlisted organization'} has been selected for {prize['prize_name']}."
-            ),
-            Div(
-                Form(
-                    Input(type="hidden", name="winner", value=str(winner_id)),
-                    Button("Award winner", type="submit"),
-                    action=f"/events/{event_id}/draws/{prize_id}/award",
-                    method="post",
-                ),
-                Form(
-                    Button("Redraw", type="submit", class_="secondary"),
-                    action=f"/events/{event_id}/draws/{prize_id}/preview",
-                    method="post",
-                ),
-                class_="modal-actions",
-            ),
-            class_="modal-card",
+    return Dialog(
+        H2("Confirm draw"),
+        P(
+            f"{winner['name']} from {winner['organization'] or 'an unlisted organization'} has been selected for {prize['prize_name']}."
         ),
-        class_="modal-backdrop",
+        Nav(
+            Form(
+                Input(type="hidden", name="winner", value=str(winner_id)),
+                Button("Award winner", type="submit", cls="primary"),
+                action=f"/events/{event_id}/draws/{prize_id}/award",
+                method="post",
+            ),
+            Form(
+                Button("Redraw", type="submit", cls="secondary"),
+                action=f"/events/{event_id}/draws/{prize_id}/preview",
+                method="post",
+            ),
+            cls="horizontal",
+        ),
+        open=True,
+        cls="modal medium padding",
     )

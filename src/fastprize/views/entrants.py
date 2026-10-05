@@ -1,11 +1,12 @@
 from fasthtml.common import (
     H1,
-    H2,
     Button,
     Details,
     Div,
     Form,
+    HTTPException,
     Input,
+    Li,
     P,
     Section,
     Small,
@@ -13,7 +14,6 @@ from fasthtml.common import (
     Strong,
     Summary,
 )
-from starlette.exceptions import HTTPException
 
 from fastprize.ui import document, record_list, redirect_event, status_message
 
@@ -28,22 +28,23 @@ def register_routes(rt, store):
         eligible_count = sum(entrant["eligible"] for entrant in entrants)
 
         def entrant_row(entrant):
-            return Div(
+            return Li(
                 Div(
                     Strong(entrant["name"]),
                     Small(entrant["organization"] or "No organization listed"),
-                    class_="record-info",
+                    cls="vertical",
                 ),
                 Div(
                     Span(
-                        "Eligible" if entrant["eligible"] else "Winner", class_="badge"
+                        "Eligible" if entrant["eligible"] else "Winner",
+                        cls="secondary-container",
                     ),
                     Form(
-                        Button("Remove", type="submit", class_="danger"),
+                        Button("Remove", type="submit", cls="error"),
                         action=f"/events/{event_id}/entrants/{entrant['id']}/remove",
                         method="post",
                     ),
-                    class_="record-actions",
+                    cls="horizontal",
                 ),
                 Details(
                     Summary("Edit"),
@@ -53,42 +54,52 @@ def register_routes(rt, store):
                             value=entrant["name"],
                             required=True,
                             aria_label="Entrant name",
+                            cls="s12 m5 l5",
                         ),
                         Input(
                             name="organization",
                             value=entrant["organization"],
                             aria_label="Organization",
+                            cls="s12 m5 l5",
                         ),
-                        Button("Save", type="submit", class_="secondary"),
+                        Button("Save", type="submit", cls="s12 m2 l2 primary"),
                         action=f"/events/{event_id}/entrants/{entrant['id']}/edit",
                         method="post",
-                        class_="edit-form",
+                        cls="grid",
                     ),
                 ),
-                class_="record",
             )
 
         message = status_message(status)
         return document(
             f"FastPrize | {event['name']} | Entrants",
             Div(
-                Div("EVENT ROSTER", class_="eyebrow"),
-                H1("Entrants"),
+                Div("EVENT ROSTER", cls="upper small-text secondary-text"),
+                H1("Entrants", cls="small"),
                 P(f"{len(entrants)} total | {eligible_count} eligible"),
-                class_="page-intro",
+                cls="vertical",
             ),
-            P(message, class_="notice") if message else "",
+            P(message, cls="tertiary-container padding") if message else "",
             Section(
                 Form(
-                    Input(name="name", placeholder="Full name", required=True),
-                    Input(name="organization", placeholder="Organization (optional)"),
-                    Button("Add entrant", type="submit"),
+                    Input(
+                        name="name",
+                        placeholder="Full name",
+                        required=True,
+                        cls="s12 m5 l5",
+                    ),
+                    Input(
+                        name="organization",
+                        placeholder="Organization (optional)",
+                        cls="s12 m5 l5",
+                    ),
+                    Button("Add entrant", type="submit", cls="s12 m2 l2 primary"),
                     action=f"/events/{event_id}/entrants",
                     method="post",
-                    class_="entry-form",
+                    cls="grid",
                 ),
                 record_list(entrants, "No entrants yet.", entrant_row),
-                class_="section",
+                cls="vertical",
             ),
             event_id=event_id,
             event_name=event["name"],

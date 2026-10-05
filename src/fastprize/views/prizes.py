@@ -4,14 +4,15 @@ from fasthtml.common import (
     Details,
     Div,
     Form,
+    HTTPException,
     Input,
+    Li,
     P,
     Section,
     Small,
     Strong,
     Summary,
 )
-from starlette.exceptions import HTTPException
 
 from fastprize.ui import document, record_list, redirect_event, status_message
 
@@ -27,7 +28,7 @@ def register_routes(rt, store):
 
         def prize_row(prize):
             actions = (
-                [Small("Awarded", class_="badge awarded")]
+                [Small("Awarded", cls="tertiary-container")]
                 if prize["drawn"]
                 else [
                     Form(
@@ -36,7 +37,7 @@ def register_routes(rt, store):
                         method="post",
                     ),
                     Form(
-                        Button("Remove", type="submit", class_="danger"),
+                        Button("Remove", type="submit", cls="error"),
                         action=f"/events/{event_id}/prizes/{prize['id']}/remove",
                         method="post",
                     ),
@@ -54,52 +55,62 @@ def register_routes(rt, store):
                                 value=prize["prize_name"],
                                 required=True,
                                 aria_label="Prize name",
+                                cls="s12 m5 l5",
                             ),
                             Input(
                                 name="sponsor",
                                 value=prize["sponsor"],
                                 aria_label="Prize sponsor",
+                                cls="s12 m5 l5",
                             ),
-                            Button("Save", type="submit", class_="secondary"),
+                            Button("Save", type="submit", cls="s12 m2 l2 primary"),
                             action=f"/events/{event_id}/prizes/{prize['id']}/edit",
                             method="post",
-                            class_="edit-form",
+                            cls="grid",
                         ),
                     )
                 ]
             )
-            return Div(
+            return Li(
                 Div(
                     Strong(prize["prize_name"]),
                     Small(prize["sponsor"] or "No sponsor listed"),
-                    class_="record-info",
+                    cls="vertical",
                 ),
-                Div(*actions, class_="record-actions"),
+                Div(*actions, cls="horizontal"),
                 *edit_form,
-                class_="record",
             )
 
         message = status_message(status)
         return document(
             f"FastPrize | {event['name']} | Prizes",
             Div(
-                Div("AWARDS", class_="eyebrow"),
-                H1("Prizes"),
+                Div("AWARDS", cls="upper small-text secondary-text"),
+                H1("Prizes", cls="small"),
                 P(f"{available_count} available | {len(prizes)} total"),
-                class_="page-intro",
+                cls="vertical",
             ),
-            P(message, class_="notice") if message else "",
+            P(message, cls="tertiary-container padding") if message else "",
             Section(
                 Form(
-                    Input(name="name", placeholder="Prize name", required=True),
-                    Input(name="sponsor", placeholder="Sponsor (optional)"),
-                    Button("Add prize", type="submit"),
+                    Input(
+                        name="name",
+                        placeholder="Prize name",
+                        required=True,
+                        cls="s12 m5 l5",
+                    ),
+                    Input(
+                        name="sponsor",
+                        placeholder="Sponsor (optional)",
+                        cls="s12 m5 l5",
+                    ),
+                    Button("Add prize", type="submit", cls="s12 m2 l2 primary"),
                     action=f"/events/{event_id}/prizes",
                     method="post",
-                    class_="entry-form",
+                    cls="grid",
                 ),
                 record_list(prizes, "No prizes yet.", prize_row),
-                class_="section",
+                cls="vertical",
             ),
             event_id=event_id,
             event_name=event["name"],

@@ -5,15 +5,17 @@ from fasthtml.common import (
     Button,
     Div,
     Form,
+    HTTPException,
+    JSONResponse,
+    Li,
     P,
+    RedirectResponse,
     Script,
     Section,
     Small,
-    Span,
     Strong,
+    Ul,
 )
-from starlette.exceptions import HTTPException
-from starlette.responses import JSONResponse, RedirectResponse
 
 from fastprize.ui import (
     document,
@@ -32,22 +34,21 @@ function resultNode(draw) {
     node.dataset.resultVersion = draw.created_at || '';
     if (!draw.id) {
         const idle = document.createElement('p');
-        idle.className = 'screen-idle';
+        idle.className = 'large-text center-align';
         idle.textContent = 'The next name could be yours.';
         node.append(idle);
         return node;
     }
     const eyebrow = document.createElement('div');
-    eyebrow.className = 'eyebrow';
+    eyebrow.className = 'upper small-text tertiary-text center-align';
     eyebrow.textContent = 'The winner is';
     const name = document.createElement('h1');
-    name.className = 'winner-name';
     name.textContent = draw.entrant_name;
     const organization = document.createElement('p');
-    organization.className = 'winner-org';
+    organization.className = 'medium-text center-align';
     organization.textContent = draw.organization || '';
     const award = document.createElement('div');
-    award.className = 'award-line';
+    award.className = 'horizontal center-align';
     const prize = document.createElement('strong');
     prize.textContent = draw.prize_name;
     const from = document.createElement('span');
@@ -67,7 +68,6 @@ async function refreshResult() {
     if (next.dataset.resultVersion !== current.dataset.resultVersion) {
       current.replaceWith(next);
       current = next;
-      requestAnimationFrame(() => current.classList.add('reveal'));
     }
   } catch (_) {}
 }
@@ -103,18 +103,17 @@ def register_routes(rt, store):
                     entrant,
                 )
         prize_rows = [
-            Div(
+            Li(
                 Div(
                     Strong(prize["prize_name"]),
                     Small(prize["sponsor"] or "No sponsor listed"),
-                    class_="record-info",
+                    cls="vertical",
                 ),
                 Form(
-                    Button("Select winner", type="submit"),
+                    Button("Select winner", type="submit", cls="primary"),
                     action=f"/events/{event_id}/draws/{prize['id']}/preview",
                     method="post",
                 ),
-                class_="record",
             )
             for prize in available_prizes
         ]
@@ -122,24 +121,26 @@ def register_routes(rt, store):
         return document(
             f"FastPrize | {event['name']} | Draw",
             Div(
-                Div("LIVE DRAW", class_="eyebrow"),
-                H1("Draw a prize"),
+                Div("LIVE DRAW", cls="upper small-text secondary-text"),
+                H1("Draw a prize", cls="small"),
                 P(f"{eligible_count} eligible entrants"),
-                class_="page-intro",
+                cls="vertical",
             ),
-            P(message, class_="notice") if message else "",
+            P(message, cls="tertiary-container padding") if message else "",
             preview_modal if preview_modal else "",
             Section(
-                H2("Available prizes"),
-                Div(*prize_rows, class_="record-list")
+                H2("Available prizes", cls="small"),
+                Ul(*prize_rows, cls="border no-space")
                 if prize_rows
-                else P("No prizes are available to draw.", class_="empty"),
-                class_="section",
+                else P(
+                    "No prizes are available to draw.", cls="surface-variant padding"
+                ),
+                cls="vertical",
             ),
             A(
                 "Open projector display",
                 href=f"/events/{event_id}/display",
-                class_="button display-link",
+                cls="tertiary",
             ),
             event_id=event_id,
             event_name=event["name"],
@@ -201,11 +202,11 @@ def register_routes(rt, store):
         return document(
             f"{event['name']} | Live draw",
             Div(
-                Div("LIVE PRIZE DRAW", class_="eyebrow"),
+                Div("LIVE PRIZE DRAW", cls="upper small-text secondary-text"),
                 winner_fragment(current_result),
-                class_="screen-content",
+                cls="responsive center-align",
             ),
-            P("FastPrize | Live draw", class_="screen-footer"),
+            P("FastPrize | Live draw", cls="small-text"),
             Script(POLL_SCRIPT),
             screen=True,
         )
