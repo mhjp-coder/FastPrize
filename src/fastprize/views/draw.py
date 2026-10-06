@@ -6,6 +6,7 @@ from fasthtml.common import (
     Div,
     Form,
     HTTPException,
+    I,
     JSONResponse,
     Li,
     P,
@@ -33,8 +34,8 @@ function resultNode(draw) {
     node.dataset.drawId = draw.id ? String(draw.id) : '';
     node.dataset.resultVersion = draw.created_at || '';
     if (!draw.id) {
-        const idle = document.createElement('p');
-        idle.className = 'large-text center-align';
+        const idle = document.createElement('h1');
+        idle.className = 'center-align';
         idle.textContent = 'The next name could be yours.';
         node.append(idle);
         return node;
@@ -110,7 +111,13 @@ def register_routes(rt, store):
                     cls="vertical",
                 ),
                 Form(
-                    Button("Select winner", type="submit", cls="primary"),
+                    Button(
+                        I("casino"),
+                        "Select winner",
+                        type="submit",
+                        cls="primary large",
+                        disabled=eligible_count == 0,
+                    ),
                     action=f"/events/{event_id}/draws/{prize['id']}/preview",
                     method="post",
                 ),
@@ -132,15 +139,38 @@ def register_routes(rt, store):
                 H2("Available prizes", cls="small"),
                 Ul(*prize_rows, cls="border no-space")
                 if prize_rows
-                else P(
-                    "No prizes are available to draw.", cls="surface-variant padding"
+                else Div(
+                    P("No prizes are available to draw."),
+                    A(
+                        I("add"),
+                        "Add a prize",
+                        href=f"/events/{event_id}/prizes",
+                        cls="secondary",
+                    ),
+                    cls="vertical",
                 ),
                 cls="vertical",
             ),
+            Div(
+                P(
+                    "Add an eligible entrant before starting a draw.",
+                    cls="secondary-container padding",
+                ),
+                A(
+                    I("groups"),
+                    "Manage entrants",
+                    href=f"/events/{event_id}/entrants",
+                    cls="secondary",
+                ),
+                cls="vertical",
+            )
+            if eligible_count == 0 and available_prizes
+            else "",
             A(
+                I("present_to_all"),
                 "Open projector display",
                 href=f"/events/{event_id}/display",
-                cls="tertiary",
+                cls="tertiary large",
             ),
             event_id=event_id,
             event_name=event["name"],

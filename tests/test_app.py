@@ -21,6 +21,14 @@ def test_selected_event_cookie_persists_and_updates(tmp_path):
     assert first_selection.cookies.get("fastprize_event_id") == str(first_id)
     first_home = client.get("/")
     assert "First event" in first_home.text
+    assert "Your events" not in first_home.text
+    assert 'class="card padding tertiary-container small-round"' in first_home.text
+    assert first_home.text.count('class="s6 m6 l6 card padding fill small-round"') == 2
+    assert 'class="button primary m6 responsive extra"' in first_home.text
+    assert f'href="/events/{first_id}/import" class="button primary' in first_home.text
+    assert 'class="button secondary m6 responsive extra"' in first_home.text
+    assert "<i>upload_file</i><span>Import CSV</span>" in first_home.text
+    assert "<i>present_to_all</i><span>Open projector display</span>" in first_home.text
     assert f'href="/events/{first_id}/import"' in first_home.text
     assert f'href="/events/{second_id}/import"' not in first_home.text
 
@@ -41,6 +49,35 @@ def test_selected_event_cookie_persists_and_updates(tmp_path):
     assert "Second event" in events_page.text
 
 
+def test_home_draw_readiness_message(tmp_path):
+    app, store = create_app(tmp_path / "readiness.sqlite3")
+    client = _test_client(app)
+    event_id = store.create_event("Awards")
+
+    client.get(f"/events/{event_id}")
+    home = client.get("/").text
+    assert "Add eligible entrants and prizes to get started." in home
+    assert f'href="/events/{event_id}/import" class="button primary' in home
+
+    store.add_entrant(event_id, "Ada Lovelace")
+    home = client.get("/").text
+    assert "Add prizes to get started." in home
+    assert f'href="/events/{event_id}/import" class="button primary' in home
+
+    store.add_prize(event_id, "Laptop")
+    home = client.get("/").text
+    assert "You are Ready to Draw!" in home
+    assert f'href="/events/{event_id}/draw" class="button primary' in home
+    assert "<i>casino</i><span>Draw</span>" in home
+
+    second_event_id = store.create_event("Raffle")
+    store.add_prize(second_event_id, "Headphones")
+    client.get(f"/events/{second_event_id}")
+    home = client.get("/").text
+    assert "Add eligible entrants to get started." in home
+    assert f'href="/events/{second_event_id}/import" class="button primary' in home
+
+
 def test_event_workflow_and_live_display(tmp_path):
     app, store = create_app(tmp_path / "web.sqlite3")
     client = _test_client(app)
@@ -48,24 +85,99 @@ def test_event_workflow_and_live_display(tmp_path):
     home = client.get("/")
     assert home.status_code == 200
     assert "FastPrize" in home.text
-    assert "No folded slips." in home.text
+    assert "Draw Center" in home.text
+    assert 'href="/assets/fastprize-favicon.svg"' in home.text
+    assert "/assets/fastprize-logo.svg" in home.text
+    assert "window.updateFastPrizeBrandTheme" in home.text
+    assert client.get("/assets/fastprize-logo.svg").status_code == 200
+    assert client.get("/assets/fastprize-favicon.svg").status_code == 200
+    assert "left drawer large-padding max m l surface-container" in home.text
+    assert 'class="bottom-margin"' in home.text
+    assert 'style="--_margin: 0.25rem"' in home.text
+    assert (
+        "Hats are for pulling rabbits, not folded slips. We do it pseudo-randomly."
+        in home.text
+    )
+    assert "Your events" not in home.text
+    assert "DRAW OPERATIONS" not in home.text
     assert 'href="/events"' in home.text
     assert "Create event" not in home.text
     assert "beercss@5.0.3/dist/cdn/beer.min.css" in home.text
     assert "beercss@5.0.3/dist/cdn/beer.min.js" in home.text
-    assert '<body class="light compact">' in home.text
+    assert "htmx.org@" in home.text
+    assert "fonts.googleapis.com/css2?family=Roboto+Flex" in home.text
+    assert "--font:" in home.text
+    assert (
+        "material-dynamic-colors@1.1.4/dist/cdn/material-dynamic-colors.min.js"
+        in home.text
+    )
+    assert "window.setFastPrizeTheme" in home.text
+    assert '<body class="light"' in home.text
     assert "<style" not in home.text.lower()
     assert "class-=" not in home.text
+    assert "font-variation-settings: 'FILL' 0" in home.text
 
     events_page = client.get("/events")
     assert events_page.status_code == 200
+    assert events_page.text.count('<hr class="medium-divider">') == 3
+    divider = '<hr class="medium-divider">'
+    first_divider = events_page.text.index(divider)
+    second_divider = events_page.text.index(divider, first_divider + len(divider))
+    third_divider = events_page.text.index(divider, second_divider + len(divider))
+    assert events_page.text.index("Choose your event.") < first_divider
+    assert first_divider < events_page.text.index("Create an event")
+    assert events_page.text.index("Create an event") < second_divider
+    assert second_divider < events_page.text.index("Your events")
+    assert events_page.text.index("Your events") < third_divider
+    assert "EVENTS" not in events_page.text
+    assert 'class="vertical bottom-padding"' in events_page.text
+    assert 'class="grid middle-align bottom-padding"' in events_page.text
+    assert (
+        "font-variation-settings: 'FILL' 0; color: var(--primary)" in events_page.text
+    )
     assert "Create event" in events_page.text
+    assert 'class="s12 m7 l9 field label border round fill extra"' in events_page.text
+    assert '<label for="event-name">Event name</label>' in events_page.text
+    assert 'class="s12 m5 l3 responsive fill extra"' in events_page.text
+    assert "<i>add</i><span>Create event</span>" in events_page.text
+    assert '<footer class="fill fixed s">' in events_page.text
+    assert 'aria-label="Events"' in events_page.text
+    assert events_page.text.index('id="event-name"') < events_page.text.index(
+        "Your events"
+    )
     assert "Open event workspace" not in events_page.text
     assert 'href="/events/1/import"' not in events_page.text
 
     workspace = client.post("/events", data={"name": "Launch day"})
     assert workspace.status_code == 200
     assert "Launch day" in workspace.text
+    assert "EVENT MANAGEMENT" not in workspace.text
+    assert "Event tasks" not in workspace.text
+    assert "Open projector display" not in workspace.text
+    assert 'class="active bottom-margin"' in workspace.text
+    assert workspace.text.count('class="s12 m6 l6 card padding fill small-round"') == 2
+    assert workspace.text.count("<strong>0</strong>") == 4
+    assert workspace.text.count('class="vertical bottom-padding"') == 2
+    assert all(
+        label in workspace.text
+        for label in ("Entrants", "total", "eligible", "Prizes", "available")
+    )
+    assert 'class="switch"' in workspace.text
+    assert 'type="checkbox"' in workspace.text
+    assert 'aria-label="Remove winners from future draws"' in workspace.text
+    assert 'hx-post="/events/1/settings"' in workspace.text
+    assert 'hx-trigger="change"' in workspace.text
+    assert 'hx-target="#remove-winners-help"' in workspace.text
+    assert 'hx-swap="outerHTML"' in workspace.text
+    assert 'id="remove-winners-help"' in workspace.text
+    assert "fetch(this.action" not in workspace.text
+    assert "Drawn winners are removed from future draws." in workspace.text
+    assert "Choose whether winners can be selected again." not in workspace.text
+    assert "Save setting" not in workspace.text
+    assert 'class="s12 responsive extra error"' in workspace.text
+    assert "<i>delete</i><span>Clear all entrants and prizes</span>" in workspace.text
+    assert "Manage" in workspace.text
+    assert "Overview" not in workspace.text
     event_management_page = client.get("/events").text
     assert "Open event workspace" not in event_management_page
     assert "Launch day" in event_management_page
@@ -93,7 +205,7 @@ def test_event_workflow_and_live_display(tmp_path):
     assert "Prizes CSV" in import_page.text
     assert "Import selected files" in import_page.text
     assert import_page.text.count('type="file"') == 2
-    assert import_page.text.count('type="button"') == 2
+    assert import_page.text.count('onclick="this.nextElementSibling.click()"') == 2
     assert import_page.text.count("attach_file") == 2
     assert import_page.text.count('type="submit"') == 1
 
@@ -155,8 +267,26 @@ def test_event_workflow_and_live_display(tmp_path):
     assert "Imported 1 prize" in prize_only_import.text
     assert any(prize["prize_name"] == "Gift card" for prize in store.prizes(event_id))
 
-    client.post(f"/events/{event_id}/settings", data={"remove_winners": "0"})
+    settings_page = client.post(
+        f"/events/{event_id}/settings", headers={"HX-Request": "true"}
+    )
+    assert settings_page.status_code == 200
     assert store.get_event(event_id)["remove_winners"] == 0
+    assert "Previous winners remain eligible." in settings_page.text
+    assert "Winner eligibility setting updated." not in settings_page.text
+    assert 'class="snackbar' not in settings_page.text
+
+    settings_page = client.post(
+        f"/events/{event_id}/settings",
+        data={"remove_winners": "1"},
+        headers={"HX-Request": "true"},
+    )
+    assert settings_page.status_code == 200
+    assert store.get_event(event_id)["remove_winners"] == 1
+    assert "Drawn winners are removed from future draws." in settings_page.text
+    settings_page = client.post(f"/events/{event_id}/settings")
+    assert store.get_event(event_id)["remove_winners"] == 0
+    assert "Previous winners remain eligible." in settings_page.text
 
     prize_page = client.post(
         f"/events/{event_id}/prizes",
@@ -171,6 +301,7 @@ def test_event_workflow_and_live_display(tmp_path):
 
     initial_display = client.get(f"/events/{event_id}/display")
     assert initial_display.status_code == 200
+    assert '<body class="dark"' in initial_display.text
     assert "The next name could be yours." in initial_display.text
 
     preview_page = client.post(f"/events/{event_id}/draws/{prize_id}/preview")
@@ -274,6 +405,14 @@ def test_operator_can_clear_all_entrants_and_prizes(tmp_path):
     )
 
     reset_page = client.post(f"/events/{event_id}/clear-data")
-    assert "Cleared all entrants and prizes." in reset_page.text
+    assert (
+        'role="status" aria-live="polite" class="s12 chip tertiary">Data cleared</span>'
+        in reset_page.text
+    )
+    clear_form = reset_page.text.split(f'action="/events/{event_id}/clear-data"', 1)[
+        1
+    ].split(">", 1)[0]
+    assert 'class="s12 grid"' in clear_form
+    assert "Cleared all entrants and prizes." not in reset_page.text
     assert store.entrants(event_id) == []
     assert store.prizes(event_id) == []

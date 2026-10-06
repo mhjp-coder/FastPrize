@@ -4,6 +4,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from fasthtml.common import fast_app, serve
+from starlette.staticfiles import StaticFiles
 
 from fastprize.store import PrizeDrawStore
 from fastprize.ui import EVENT_SELECTION_COOKIE
@@ -65,9 +66,11 @@ class _SelectedEventCookieMiddleware:
 def create_app(db_path: str | Path | None = None):
     database = db_path or os.environ.get("FASTPRIZE_DB_PATH", "fastprize.sqlite3")
     store = PrizeDrawStore(database)
-    app, rt = fast_app(title="FastPrize", pico=False, surreal=False, htmx=False)
+    app, rt = fast_app(title="FastPrize", pico=False, surreal=False, htmx=True)
 
     app.add_middleware(_SelectedEventCookieMiddleware, store=store)
+    asset_directory = Path(__file__).resolve().parents[2] / "assets"
+    app.mount("/assets", StaticFiles(directory=asset_directory), name="assets")
 
     for register_routes in (
         events.register_routes,

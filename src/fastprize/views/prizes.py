@@ -1,10 +1,12 @@
 from fasthtml.common import (
     H1,
+    H2,
     Button,
     Details,
     Div,
     Form,
     HTTPException,
+    I,
     Input,
     Li,
     P,
@@ -32,12 +34,12 @@ def register_routes(rt, store):
                 if prize["drawn"]
                 else [
                     Form(
-                        Button("Draw", type="submit"),
+                        Button(I("casino"), "Draw", type="submit", cls="primary"),
                         action=f"/events/{event_id}/draws/{prize['id']}",
                         method="post",
                     ),
                     Form(
-                        Button("Remove", type="submit", cls="error"),
+                        Button(I("delete"), "Remove", type="submit", cls="error"),
                         action=f"/events/{event_id}/prizes/{prize['id']}/remove",
                         method="post",
                     ),
@@ -92,6 +94,7 @@ def register_routes(rt, store):
             ),
             P(message, cls="tertiary-container padding") if message else "",
             Section(
+                H2("Add prize", cls="small"),
                 Form(
                     Input(
                         name="name",
@@ -104,11 +107,20 @@ def register_routes(rt, store):
                         placeholder="Sponsor (optional)",
                         cls="s12 m5 l5",
                     ),
-                    Button("Add prize", type="submit", cls="s12 m2 l2 primary"),
+                    Button(
+                        I("add"),
+                        "Add prize",
+                        type="submit",
+                        cls="s12 m2 l2 primary large",
+                    ),
                     action=f"/events/{event_id}/prizes",
                     method="post",
                     cls="grid",
                 ),
+                cls="vertical",
+            ),
+            Section(
+                H2("Prize list", cls="small"),
                 record_list(prizes, "No prizes yet.", prize_row),
                 cls="vertical",
             ),

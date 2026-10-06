@@ -1,7 +1,9 @@
 from fasthtml.common import (
     H1,
+    A,
     Div,
     HTTPException,
+    I,
     P,
     Small,
     Strong,
@@ -48,7 +50,16 @@ def register_routes(rt, store):
                 cls="responsive scroll",
             )
             if history
-            else P("Completed draws will appear here.", cls="surface-variant padding"),
+            else Div(
+                P("Completed draws will appear here.", cls="surface-variant padding"),
+                A(
+                    I("casino"),
+                    "Start a draw",
+                    href=f"/events/{event_id}/draw",
+                    cls="tertiary large",
+                ),
+                cls="vertical",
+            ),
             event_id=event_id,
             event_name=event["name"],
             active_link="history",

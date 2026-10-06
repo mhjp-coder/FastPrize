@@ -51,7 +51,7 @@ def register_routes(rt, store):
                     Div(
                         Div(
                             H2("Entrants", cls="small"),
-                            Small("Import names and organizations."),
+                            Small("Required: name. Optional: organization."),
                             Button(
                                 I("attach_file"),
                                 Span("Entrants CSV"),
@@ -70,7 +70,7 @@ def register_routes(rt, store):
                         ),
                         Div(
                             H2("Prizes", cls="small"),
-                            Small("Import prize names and sponsors."),
+                            Small("Required: name. Optional: sponsor."),
                             Button(
                                 I("attach_file"),
                                 Span("Prizes CSV"),
@@ -89,7 +89,12 @@ def register_routes(rt, store):
                         ),
                         cls="grid",
                     ),
-                    Button("Import selected files", type="submit", cls="primary"),
+                    Button(
+                        I("upload_file"),
+                        "Import selected files",
+                        type="submit",
+                        cls="primary large",
+                    ),
                     cls="vertical",
                 ),
                 action=f"/events/{event_id}/import",

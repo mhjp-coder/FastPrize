@@ -9,6 +9,7 @@ from fasthtml.common import (
     Button,
     Dialog,
     Div,
+    Footer,
     Form,
     Head,
     Header,
@@ -26,6 +27,8 @@ from fasthtml.common import (
     Strong,
     Title,
     Ul,
+    fhjsscr,
+    htmxsrc,
 )
 
 EVENT_SELECTION_COOKIE = "fastprize_event_id"
@@ -39,8 +42,7 @@ STATUS_MESSAGES = {
     "prize-added": "Prize added.",
     "prize-updated": "Prize updated.",
     "prize-removed": "Prize removed.",
-    "data-cleared": "Cleared all entrants and prizes.",
-    "settings-updated": "Winner eligibility setting updated.",
+    "data-cleared": "Data cleared",
     "entrants-imported": "Entrant CSV imported.",
     "prizes-imported": "Prize CSV imported.",
     "draw-complete": "The draw is complete. The projector is updating now.",
@@ -107,14 +109,20 @@ def document(
     active_link: str = "",
 ):
     if screen:
-        body_content = (Main(*content, cls="responsive center-align padding"),)
-        body_class = "dark compact"
+        body_content = (
+            Main(
+                *content,
+                cls="responsive center-align padding",
+                style="display: flex; flex-direction: column; justify-content: center; align-items: center; min-height: 100vh",
+            ),
+        )
+        body_class = "dark"
     else:
-        page_links = [("All events", "events", "/events", "calendar_month")]
+        page_links = [("Events", "events", "/events", "calendar_month")]
         if event_id is not None:
             page_links.extend(
                 [
-                    ("Overview", "overview", f"/events/{event_id}", "dashboard"),
+                    ("Manage", "overview", f"/events/{event_id}", "dashboard"),
                     ("Entrants", "entrants", f"/events/{event_id}/entrants", "groups"),
                     ("Prizes", "prizes", f"/events/{event_id}/prizes", "redeem"),
                     (
@@ -134,61 +142,198 @@ def document(
             )
         navigation = [
             A(
-                I(icon),
-                label,
+                I(
+                    icon,
+                    style=(
+                        "font-variation-settings: 'FILL' 0; color: var(--primary)"
+                        if active_link == key
+                        else "font-variation-settings: 'FILL' 0"
+                    ),
+                ),
+                Div(label),
                 href=href,
-                cls="active" if active_link == key else None,
+                cls="active bottom-margin" if active_link == key else "bottom-margin",
+                style="--_margin: 0.25rem",
                 aria_current="page" if active_link == key else None,
             )
             for label, key, href, icon in page_links
         ]
+        mobile_navigation = [
+            A(
+                I(
+                    icon,
+                    style=(
+                        "font-variation-settings: 'FILL' 0; color: var(--primary)"
+                        if active_link == key
+                        else "font-variation-settings: 'FILL' 0"
+                    ),
+                ),
+                href=href,
+                cls=(
+                    "max circle transparent active"
+                    if active_link == key
+                    else "max circle transparent"
+                ),
+                title=label,
+                aria_label=label,
+                aria_current="page" if active_link == key else None,
+            )
+            for label, key, href, icon in page_links
+        ]
+
+        def brand_mark(width: int = 96, height: int = 60):
+            return Div(
+                role="img",
+                aria_label="FastPrize logo",
+                style=f"width: {width}px; height: {height}px; border-radius: 0; background-color: var(--primary); mask: url('/assets/fastprize-logo.svg') center / contain no-repeat; -webkit-mask: url('/assets/fastprize-logo.svg') center / contain no-repeat",
+            )
+
         brand = A(
-            I("casino"),
-            Strong("FastPrize"),
+            brand_mark(),
             href="/",
+            aria_label="FastPrize home",
+        )
+        sidebar_brand = A(
+            brand_mark(80, 50),
+            href="/",
+            aria_label="FastPrize home",
+            style="width: 88px; height: 88px; padding: 0; display: flex; align-items: center; justify-content: center; border-radius: 50%",
         )
         body_content = (
             Nav(
-                brand,
-                P("CURRENT EVENT", cls="upper small-text"),
-                Strong(event_name or "Choose an event"),
-                P("WORKSPACE", cls="upper small-text"),
-                Div(
-                    *navigation,
-                    cls="vertical",
-                ),
-                cls="left m l vertical padding",
+                Div(sidebar_brand, style="margin-bottom: 1rem"),
+                *navigation,
+                cls="left drawer large-padding max m l surface-container",
+                style="width: 14rem; min-width: 14rem",
             ),
             Nav(
                 brand,
-                A(I("calendar_month"), "Events", href="/events"),
-                cls="top s",
+                cls="top s padding",
             ),
             Header(
                 Div(
-                    P("WORKSPACE", cls="upper small-text"),
-                    Strong(event_name or "Prize draw operations"),
+                    Button(
+                        I("dark_mode"),
+                        type="button",
+                        title="Toggle light or dark mode",
+                        aria_label="Toggle light or dark mode",
+                        onclick="""
+                            const nextMode = ui('mode') === 'dark' ? 'light' : 'dark';
+                            ui('mode', nextMode);
+                            localStorage.setItem('theme-mode', nextMode);
+                            window.updateFastPrizeBrandTheme();
+                        """,
+                        cls="circle flat large",
+                    ),
+                    Button(
+                        Span(),
+                        type="button",
+                        title="Teal theme",
+                        aria_label="Use teal theme",
+                        onclick="window.setFastPrizeTheme('#009688')",
+                        cls="circle",
+                        style="background-color: #009688",
+                    ),
+                    Button(
+                        Span(),
+                        type="button",
+                        title="Amber theme",
+                        aria_label="Use amber theme",
+                        onclick="window.setFastPrizeTheme('#ffc107')",
+                        cls="circle",
+                        style="background-color: #ffc107",
+                    ),
+                    Button(
+                        Span(),
+                        type="button",
+                        title="Blue theme",
+                        aria_label="Use blue theme",
+                        onclick="window.setFastPrizeTheme('#0277bd')",
+                        cls="circle",
+                        style="background-color: #0277bd",
+                    ),
+                    cls="horizontal middle-align small-space",
                 ),
-                A("All events", href="/events", cls="link"),
+                cls="large-padding horizontal wrap middle-align",
+                style="display: flex; justify-content: flex-end",
             ),
-            Main(*content, cls="responsive"),
+            Main(*content, cls="responsive large-padding"),
+            Div(cls="s", style="height: 5rem"),
+            Footer(
+                Nav(*mobile_navigation),
+                cls="fill fixed s",
+            ),
         )
-        body_class = "light compact"
+        body_class = "light"
     return Html(
         Head(
             Meta(charset="utf-8"),
             Meta(name="viewport", content="width=device-width, initial-scale=1"),
             Title(title),
+            htmxsrc,
+            fhjsscr,
+            Link(
+                rel="icon",
+                type="image/svg+xml",
+                href="/assets/fastprize-favicon.svg",
+            ),
+            Link(rel="preconnect", href="https://fonts.googleapis.com"),
+            Link(
+                rel="preconnect",
+                href="https://fonts.gstatic.com",
+                crossorigin="anonymous",
+            ),
+            Link(
+                rel="stylesheet",
+                href="https://fonts.googleapis.com/css2?family=Roboto+Flex:opsz,wght@8..144,100..1000&display=swap",
+            ),
             Link(
                 rel="stylesheet",
                 href="https://cdn.jsdelivr.net/npm/beercss@5.0.3/dist/cdn/beer.min.css",
             ),
             Script(
+                src="https://cdn.jsdelivr.net/npm/material-dynamic-colors@1.1.4/dist/cdn/material-dynamic-colors.min.js",
+                type="module",
+            ),
+            Script(
                 src="https://cdn.jsdelivr.net/npm/beercss@5.0.3/dist/cdn/beer.min.js",
                 type="module",
             ),
+            Script("""
+                let faviconSourcePromise;
+                window.updateFastPrizeBrandTheme = async () => {
+                    const favicon = document.querySelector('link[rel="icon"]');
+                    if (!favicon) return;
+                    faviconSourcePromise ||= fetch('/assets/fastprize-favicon.svg')
+                        .then(response => response.ok ? response.text() : '');
+                    const source = await faviconSourcePromise;
+                    if (!source) return;
+                    const styles = getComputedStyle(document.body);
+                    const primary = styles.getPropertyValue('--primary').trim();
+                    const onPrimary = styles.getPropertyValue('--on-primary').trim();
+                    const themedIcon = source
+                        .replace('#245f83', primary)
+                        .replace('#ffffff', onPrimary);
+                    favicon.href = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(themedIcon)}`;
+                };
+                window.setFastPrizeTheme = async (color) => {
+                    await ui('theme', color);
+                    localStorage.setItem('theme-color', color);
+                    await window.updateFastPrizeBrandTheme();
+                };
+                document.addEventListener('DOMContentLoaded', async () => {
+                    const savedMode = localStorage.getItem('theme-mode') || 'light';
+                    const savedColor = localStorage.getItem('theme-color') || '#009688';
+                    if (!document.body.classList.contains('dark')) {
+                        ui('mode', savedMode);
+                    }
+                    await ui('theme', savedColor);
+                    await window.updateFastPrizeBrandTheme();
+                });
+            """),
         ),
         Body(*body_content, cls=body_class),
+        style="--font: 'Roboto Flex', sans-serif",
     )
 
 
@@ -201,7 +346,7 @@ def record_list(records: list[dict], empty_message: str, render_record):
 def winner_fragment(draw: dict | None):
     if draw is None:
         return Div(
-            P("The next name could be yours.", cls="large-text center-align"),
+            H1("The next name could be yours.", cls="center-align"),
             id="live-result",
             data_draw_id="",
         )

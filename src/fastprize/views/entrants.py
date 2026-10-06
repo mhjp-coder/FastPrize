@@ -1,10 +1,12 @@
 from fasthtml.common import (
     H1,
+    H2,
     Button,
     Details,
     Div,
     Form,
     HTTPException,
+    I,
     Input,
     Li,
     P,
@@ -40,7 +42,7 @@ def register_routes(rt, store):
                         cls="secondary-container",
                     ),
                     Form(
-                        Button("Remove", type="submit", cls="error"),
+                        Button(I("delete"), "Remove", type="submit", cls="error"),
                         action=f"/events/{event_id}/entrants/{entrant['id']}/remove",
                         method="post",
                     ),
@@ -81,6 +83,7 @@ def register_routes(rt, store):
             ),
             P(message, cls="tertiary-container padding") if message else "",
             Section(
+                H2("Add entrant", cls="small"),
                 Form(
                     Input(
                         name="name",
@@ -93,11 +96,20 @@ def register_routes(rt, store):
                         placeholder="Organization (optional)",
                         cls="s12 m5 l5",
                     ),
-                    Button("Add entrant", type="submit", cls="s12 m2 l2 primary"),
+                    Button(
+                        I("person_add"),
+                        "Add entrant",
+                        type="submit",
+                        cls="s12 m2 l2 primary large",
+                    ),
                     action=f"/events/{event_id}/entrants",
                     method="post",
                     cls="grid",
                 ),
+                cls="vertical",
+            ),
+            Section(
+                H2("Entrant list", cls="small"),
                 record_list(entrants, "No entrants yet.", entrant_row),
                 cls="vertical",
             ),
