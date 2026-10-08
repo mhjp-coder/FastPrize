@@ -18,12 +18,11 @@
 
 ## Design Principles
 - Use BeerCSS to maintain a consistent and modern design throughout the application.
-- Do Not override BeerCSS classes with custom styles unless necessary.
+- Do not add custom CSS, inline styles, or `<Style>` blocks unless absolutely necessary and BeerCSS has no reasonable equivalent. If custom styling is unavoidable, keep it minimal and explain why.
 - Use BeerCSS classes consistently to ensure a cohesive and visually appealing design throughout the application.
 - Use BeerCSS Compact layout.
 - Use BeerCSS Grid system for layout consistency and responsiveness.
 - Utilize BeerCSS utility classes to streamline styling and maintain a consistent design language.
-- Ensure that all custom styles complement BeerCSS and do not conflict with its classes.
 - Keep the user interface simple and intuitive, ensuring that users can easily navigate and interact with the application.
 - Follow responsive design principles to provide a seamless experience across different devices and screen sizes.
 - Use semantic HTML elements to improve the structure, accessibility, and SEO of the application.
@@ -58,17 +57,8 @@ Construct adaptive multi-device structures using BeerCSS structural standards ra
 ## 3. Dark Mode, Dynamic Themes, & LocalStorage Persistence
 Implement full interface adjustments leveraging BeerCSS runtime JavaScript helper tools, persisting selections seamlessly via standard `localStorage` keys (`'theme-mode'` and `'theme-color'`).
 
-*   **Initialization Header Script:** Ensure the global base layout emits a brief inline `<script>` tag in its header immediately after loading BeerCSS. This prevents layout shift by resolving theme settings *before* rendering the full body:
-    ```python
-    Script("""
-        document.addEventListener('DOMContentLoaded', () => {
-            const savedMode = localStorage.getItem('theme-mode') || 'light';
-            const savedColor = localStorage.getItem('theme-color') || '#009688';
-            ui('mode', savedMode);
-            ui('theme', savedColor);
-        });
-    """)
-    ```
+*   **Theme Restoration:** Load a static module script after BeerCSS in the global base layout, for example `Script(src="/assets/theme.js", type="module")`. In that file, read `theme-mode` and `theme-color` from `localStorage` and apply them with `ui('mode', savedMode)` and `await ui('theme', savedColor)`. Module scripts run after the document is parsed; this restores choices on reload but may allow a brief flash before the theme is applied.
+*   **Inline JavaScript:** Always prefer FastHTML's built in HTMX capabilities for handling dynamic interactions instead of embedding raw JavaScript directly. Also use BeerCSS js helpers for theme and UI manipulations.
 *   **Light/Dark Toggle Execution:** Use an interactive macro that evaluates the current system state, applies the flip via `ui()`, and updates `localStorage`:
     ```python
     Button(
