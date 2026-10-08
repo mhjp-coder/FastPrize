@@ -1,3 +1,6 @@
+import re
+from typing import Any, cast
+
 from fasthtml.common import Client
 
 from fastprize.app import create_app
@@ -5,8 +8,318 @@ from fastprize.app import create_app
 
 def _test_client(app):
     client = Client(app)
-    client.cli.follow_redirects = True
+    cast(Any, client).cli.follow_redirects = True
     return client
+
+
+def test_event_links_have_individual_compact_containers(tmp_path):
+    app, store = create_app(tmp_path / "event-links.sqlite3")
+    store.create_event("Awards")
+    store.create_event("Raffle")
+
+    page = _test_client(app).get("/events").text
+
+    assert (
+        page.count(
+            'class="s12 m6 l4 link responsive center-align padding surface-container small-round"'
+        )
+        == 2
+    )
+    assert '<h3 class="small">Awards</h3>' in page
+    assert '<h3 class="small">Raffle</h3>' in page
+
+
+def test_events_create_form_stacks_on_small_screens(tmp_path):
+    app, _ = create_app(tmp_path / "responsive-event-form.sqlite3")
+    page = _test_client(app).get("/events").text
+
+    assert 'class="s12 m7 field label border fill round extra"' in page
+    assert 'class="s12 m5 responsive extra primary"' in page
+
+
+def test_entrants_page_matches_management_card_layout(tmp_path):
+    app, store = create_app(tmp_path / "entrant-page-layout.sqlite3")
+    event_id = store.create_event("Awards")
+    store.add_entrant(event_id, "Ada Lovelace", "Engine Co")
+    client = _test_client(app)
+    page = client.get(f"/events/{event_id}/entrants").text
+    entrant_id = store.entrants(event_id)[0]["id"]
+
+    assert (
+        'class="card padding primary-container small-round vertical bottom-margin"'
+        in page
+    )
+    assert (
+        page.count(
+            'class="card padding secondary-container small-round vertical bottom-padding"'
+        )
+        == 2
+    )
+    assert page.count('class="s6 m6 l6 field label border fill round extra"') == 2
+    assert 'class="s12 responsive extra primary"' in page
+    assert (
+        'class="s12 m6 l6 card padding tertiary-container small-round vertical"' in page
+    )
+    assert 'aria-label="Remove Ada Lovelace"' in page
+    assert 'aria-label="Edit Ada Lovelace"' in page
+    assert "<i>edit</i>" in page
+    assert 'class="button circle primary"' in page
+    assert f'hx-get="/events/{event_id}/entrants/{entrant_id}/edit"' in page
+    assert f'hx-target="#entrant-info-{entrant_id}"' in page
+    assert (
+        'class="horizontal middle-align small-space top-margin right-align bottom-margin"'
+        in page
+    )
+    assert "style=" not in page
+    assert "<span>Remove</span>" not in page
+    assert 'aria-label="Organization (optional)"' in page
+
+    edit_form = client.get(f"/events/{event_id}/entrants/{entrant_id}/edit").text
+    assert "style=" not in edit_form
+    assert edit_form.count('class="field round fill border"') == 2
+    assert 'class="circle primary"' in edit_form
+    assert 'class="circle"' in edit_form
+    assert 'name="name" value="Ada Lovelace"' in edit_form
+    assert 'name="organization" value="Engine Co"' in edit_form
+    assert f'hx-get="/events/{event_id}/entrants/{entrant_id}/display"' in edit_form
+
+    display = client.get(f"/events/{event_id}/entrants/{entrant_id}/display").text
+    assert "<strong>Ada Lovelace</strong>" in display
+    assert "<small>Engine Co</small>" in display
+
+
+def test_entrant_search_filters_names_and_organizations(tmp_path):
+    app, store = create_app(tmp_path / "entrant-search.sqlite3")
+    event_id = store.create_event("Awards")
+    store.add_entrant(event_id, "Ada Lovelace", "Engine Co")
+    store.add_entrant(event_id, "Grace Hopper", "Acme")
+    client = _test_client(app)
+
+    page = client.get(f"/events/{event_id}/entrants").text
+    assert 'id="entrant-search"' in page
+    assert 'class="s12 m6 field large prefix round fill border active"' in page
+    assert f'hx-get="/events/{event_id}/entrants/search"' in page
+    assert 'hx-target="#entrant-list"' in page
+
+    by_name = client.get(f"/events/{event_id}/entrants/search?search=GRACE").text
+    assert "Grace Hopper" in by_name
+    assert "Ada Lovelace" not in by_name
+
+    by_organization = client.get(
+        f"/events/{event_id}/entrants/search?search=engine"
+    ).text
+    assert "Ada Lovelace" in by_organization
+    assert "Grace Hopper" not in by_organization
+
+    no_matches = client.get(f"/events/{event_id}/entrants/search?search=missing").text
+    assert "No entrants match your search." in no_matches
+    assert (
+        '<p class="s12 secondary-text">No entrants match your search.</p>' in no_matches
+    )
+    assert "Ada Lovelace" not in no_matches
+
+
+def test_entrant_eligibility_button_toggles_status(tmp_path):
+    app, store = create_app(tmp_path / "entrant-eligibility-toggle.sqlite3")
+    event_id = store.create_event("Awards")
+    store.add_entrant(event_id, "Ada Lovelace")
+    entrant_id = store.entrants(event_id)[0]["id"]
+    client = _test_client(app)
+
+    page = client.get(f"/events/{event_id}/entrants").text
+    eligibility_dialog = f"eligibility-dialog-{entrant_id}"
+    assert "Eligible" in page
+    assert 'aria-pressed="true"' in page
+    assert 'class="primary">Eligible</button>' in page
+    assert f'id="{eligibility_dialog}"' in page
+    assert f'aria-controls="{eligibility_dialog}"' in page
+    assert "Mark Ada Lovelace not eligible?" in page
+
+    page = client.post(
+        f"/events/{event_id}/entrants/{entrant_id}/toggle-eligibility"
+    ).text
+    assert "Not eligible" in page
+    assert 'aria-pressed="false"' in page
+    assert 'class="error">Not eligible</button>' in page
+    assert "Mark Ada Lovelace eligible?" in page
+    assert store.entrants(event_id)[0]["eligible"] == 0
+
+    page = client.post(
+        f"/events/{event_id}/entrants/{entrant_id}/toggle-eligibility"
+    ).text
+    assert "Eligible" in page
+    assert "Mark Ada Lovelace not eligible?" in page
+    assert store.entrants(event_id)[0]["eligible"] == 1
+
+
+def test_entrant_mutations_return_htmx_fragments(tmp_path):
+    app, store = create_app(tmp_path / "entrant-htmx.sqlite3")
+    event_id = store.create_event("Awards")
+    store.add_entrant(event_id, "Ada Lovelace", "Engine Co")
+    entrant_id = store.entrants(event_id)[0]["id"]
+    client = _test_client(app)
+    headers = {"HX-Request": "true"}
+
+    page = client.get(f"/events/{event_id}/entrants").text
+    assert (
+        f'hx-post="/events/{event_id}/entrants/{entrant_id}/toggle-eligibility"' in page
+    )
+    assert f'hx-post="/events/{event_id}/entrants/{entrant_id}/remove"' in page
+    entrant_dialog = f"remove-entrant-dialog-{entrant_id}"
+    assert f'id="{entrant_dialog}"' in page
+    assert 'class="modal padding medium-width left-align"' in page
+    assert 'aria-label="Confirm removing Ada Lovelace"' in page
+    assert f'aria-controls="{entrant_dialog}"' in page
+    assert page.count(f'data-ui="#{entrant_dialog}"') == 2
+    assert f'action="/events/{event_id}/entrants/{entrant_id}/remove"' in page
+
+    eligibility = client.post(
+        f"/events/{event_id}/entrants/{entrant_id}/toggle-eligibility",
+        headers=headers,
+    )
+    assert "<!doctype html>" not in eligibility.text
+    assert 'id="entrant-row-' in eligibility.text
+    assert 'aria-pressed="false"' in eligibility.text
+    assert 'hx-swap-oob="outerHTML"' in eligibility.text
+    assert "1 total | 0 eligible" in eligibility.text
+
+    edit_form = client.get(f"/events/{event_id}/entrants/{entrant_id}/edit").text
+    assert f'hx-post="/events/{event_id}/entrants/{entrant_id}/edit"' in edit_form
+    edited = client.post(
+        f"/events/{event_id}/entrants/{entrant_id}/edit",
+        data={"name": "Ada Byron", "organization": "Analytical Engines"},
+        headers=headers,
+    )
+    assert "<!doctype html>" not in edited.text
+    assert 'id="entrant-row-' in edited.text
+    assert "Ada Byron" in edited.text
+
+    removed = client.post(
+        f"/events/{event_id}/entrants/{entrant_id}/remove",
+        headers=headers,
+    )
+    assert "<!doctype html>" not in removed.text
+    assert 'hx-swap-oob="outerHTML"' in removed.text
+    assert "0 total | 0 eligible" in removed.text
+    assert store.entrants(event_id) == []
+
+
+def test_workspace_data_management_uses_confirmation_dialogs(tmp_path):
+    app, store = create_app(tmp_path / "data-management-dialogs.sqlite3")
+    event_id = store.create_event("Awards")
+    page = _test_client(app).get(f"/events/{event_id}").text
+
+    assert "Clear Database" in page
+    assert 'id="clear-database-dialog"' in page
+    assert page.count('class="modal padding medium-width"') == 2
+    assert 'aria-label="Confirm clearing event data"' in page
+    assert page.count('data-ui="#clear-database-dialog"') == 2
+    assert f'action="/events/{event_id}/clear-data"' in page
+    assert 'id="delete-event-dialog"' in page
+    assert 'aria-label="Confirm deleting this event"' in page
+    assert page.count('data-ui="#delete-event-dialog"') == 2
+    assert f'action="/events/{event_id}/delete"' in page
+    assert "closest('dialog').close()" not in page
+    assert 'onsubmit="return confirm(' not in page
+
+
+def test_workspace_contains_combined_csv_import_form(tmp_path):
+    app, store = create_app(tmp_path / "workspace-import-form.sqlite3")
+    event_id = store.create_event("Awards")
+    client = _test_client(app)
+
+    workspace = client.get(f"/events/{event_id}").text
+
+    assert 'id="csv-import"' in workspace
+    assert workspace.index('<h2 class="small">Prizes</h2>') < workspace.index(
+        'id="csv-import"'
+    )
+    assert (
+        '<section id="csv-import" class="s12 card padding secondary-container small-round vertical bottom-padding">'
+        in workspace
+    )
+    assert '<h2 class="small bottom-padding">Import CSV</h2>' in workspace
+    assert f'action="/events/{event_id}/import"' in workspace
+    assert workspace.count('type="file"') == 2
+    assert 'for="entrants-file"' in workspace
+    assert 'for="prizes-file"' in workspace
+    assert 'data-filename-target="entrants-file-name"' in workspace
+    assert 'data-filename-target="prizes-file-name"' in workspace
+    assert 'aria-controls="entrants-csv-info"' in workspace
+    assert 'aria-controls="prizes-csv-info"' in workspace
+    assert 'id="entrants-csv-info"' in workspace
+    assert 'id="prizes-csv-info"' in workspace
+    assert workspace.count('data-close-on-backdrop="true"') == 2
+    assert "Required: name. Optional: organization." in workspace
+    assert (
+        "Required: prize_name. Optional: sponsor, number (or prize_number)."
+        in workspace
+    )
+    assert f'href="/events/{event_id}/import"' not in workspace
+    assert workspace.count('<h3 class="small">') >= 2
+    assert workspace.count('class="circle transparent"') >= 2
+    assert (
+        workspace.count('class="horizontal middle-align small-space bottom-margin"')
+        == 2
+    )
+    assert 'class="center-align"' not in workspace
+    import_form = workspace.split('id="csv-import"', 1)[1]
+    assert (
+        f'<form enctype="multipart/form-data" action="/events/{event_id}/import" method="post" class="grid small-space">'
+        in import_form
+    )
+    assert '<button type="submit" class="s12 responsive extra primary">' in import_form
+
+    import_alias = client.get(f"/events/{event_id}/import")
+    assert import_alias.status_code == 200
+    assert 'id="csv-import"' in import_alias.text
+
+    imported = client.post(
+        f"/events/{event_id}/import",
+        files={
+            "entrants_file": ("entrants.csv", "name\nAda Lovelace\n"),
+            "prizes_file": ("prizes.csv", "prize_name\nLaptop\n"),
+        },
+    )
+    assert "Imported 1 entrant and 1 prize" in imported.text
+    assert len(store.entrants(event_id)) == 1
+    assert len(store.prizes(event_id)) == 1
+
+
+def test_draw_center_shows_create_button_only_when_no_events(tmp_path):
+    app, store = create_app(tmp_path / "empty-home.sqlite3")
+    client = _test_client(app)
+
+    empty_home = client.get("/").text
+    assert (
+        "Choose an event to open its workspace, or create one to get started."
+        in empty_home
+    )
+    assert (
+        'class="card padding primary-container small-round vertical bottom-margin"'
+        in empty_home
+    )
+    assert (
+        empty_home.index("Draw Center")
+        < empty_home.index("Hats are for pulling rabbits")
+        < empty_home.index("Choose an event to open its workspace")
+    )
+    assert (
+        '<a href="/events" class="button primary responsive extra bottom-margin">'
+        in empty_home
+    )
+    assert "<i>add</i><span>Create event</span>" in empty_home
+
+    store.create_event("Awards")
+    populated_home = client.get("/").text
+    assert (
+        "Choose an event to open its workspace, or create one to get started."
+        in populated_home
+    )
+    assert (
+        '<a href="/events" class="button primary responsive extra bottom-margin">'
+        not in populated_home
+    )
 
 
 def test_selected_event_cookie_persists_and_updates(tmp_path):
@@ -26,9 +339,14 @@ def test_selected_event_cookie_persists_and_updates(tmp_path):
     assert first_home.text.count('class="s6 m6 l6 card padding fill small-round"') == 2
     assert 'class="button primary m6 responsive extra"' in first_home.text
     assert f'href="/events/{first_id}/import" class="button primary' in first_home.text
-    assert 'class="button secondary m6 responsive extra"' in first_home.text
+    assert 'class="tertiary m6 responsive extra"' in first_home.text
     assert "<i>upload_file</i><span>Import CSV</span>" in first_home.text
-    assert "<i>present_to_all</i><span>Open projector display</span>" in first_home.text
+    assert "<i>qr_code_2</i><span>Live display</span>" in first_home.text
+    assert "Public display" not in first_home.text
+    assert "Open projector display" not in first_home.text
+    assert f'hx-get="/events/{first_id}/display-link"' in first_home.text
+    assert 'hx-target="#display-link-modal"' in first_home.text
+    assert 'id="display-link-modal"' in first_home.text
     assert f'href="/events/{first_id}/import"' in first_home.text
     assert f'href="/events/{second_id}/import"' not in first_home.text
 
@@ -69,6 +387,7 @@ def test_home_draw_readiness_message(tmp_path):
     assert "You are Ready to Draw!" in home
     assert f'href="/events/{event_id}/draw" class="button primary' in home
     assert "<i>casino</i><span>Draw</span>" in home
+    assert home.count('<h2 class="small">1</h2>') == 2
 
     second_event_id = store.create_event("Raffle")
     store.add_prize(second_event_id, "Headphones")
@@ -76,6 +395,244 @@ def test_home_draw_readiness_message(tmp_path):
     home = client.get("/").text
     assert "Add eligible entrants to get started." in home
     assert f'href="/events/{second_event_id}/import" class="button primary' in home
+
+
+def test_draw_page_uses_live_draw_prize_cards(tmp_path):
+    app, store = create_app(tmp_path / "draw-page-layout.sqlite3")
+    event_id = store.create_event("Awards")
+    store.add_entrant(event_id, "Ada Lovelace", "Engine Co")
+    entrant_id = store.entrants(event_id)[0]["id"]
+    first_prize_id = store.add_prize(event_id, "Laptop", "Northwind", "0007")
+    second_prize_id = store.add_prize(event_id, "Coffee basket", "Contoso")
+    client = _test_client(app)
+    page = client.get(f"/events/{event_id}/draw").text
+
+    assert '<h1 class="small max">Live Draw</h1>' in page
+    assert '<p class="s9">Awards</p>' in page
+    assert 'class="s3 right-align">2 prizes left</span>' in page
+    assert page.index("Live Draw</h1>") < page.index('<p class="s9">Awards</p>')
+    assert page.index("Live Draw</h1>") < page.index("Live display</span>")
+    assert 'title="Live display"' in page
+    assert 'aria-label="Live display"' in page
+    assert f'hx-get="/events/{event_id}/display-link"' in page
+    assert 'hx-target="#display-link-modal"' in page
+    assert f'href="/events/{event_id}/display"' not in page
+    assert 'id="display-link-modal"' in page
+    assert 'id="draw-prize-search"' in page
+    assert f'hx-get="/events/{event_id}/draw/search"' in page
+    assert 'hx-target="#draw-prize-list"' in page
+    assert page.index("<div>Draw</div>") < page.index("<div>Live display</div>")
+    assert page.index("<div>Live display</div>") < page.index("<div>Draw history</div>")
+
+    link = client.get(f"/events/{event_id}/display-link").text
+    assert '<h2 class="small">Live display</h2>' in link
+    assert 'id="display-link-dialog"' in link
+    assert 'class="modal padding medium-width left-align"' in link
+    assert 'data-auto-open="true"' in link
+    assert f'href="http://testserver/events/{event_id}/display"' in link
+    assert 'src="data:image/svg+xml' in link
+    assert 'alt="QR code for the live draw display link"' in link
+    assert 'method="dialog"' in link
+    assert client.get("/events/999/display-link").status_code == 404
+    assert "Add an eligible entrant before starting a draw." not in page
+    assert "Draw a prize" not in page
+    assert "1 eligible entrants" not in page
+    assert (
+        page.count(
+            'class="s12 m6 l6 card padding tertiary-container small-round vertical"'
+        )
+        == 2
+    )
+    assert page.count("<i>casino</i><span>Draw</span>") == 2
+    assert 'class="grid middle-align small-space top-margin bottom-margin"' in page
+    assert '<small class="s6"># 0007</small>' in page
+    assert page.index('<small class="s6"># 0007</small>') < page.index(
+        f'action="/events/{event_id}/draws/{first_prize_id}/preview"'
+    )
+    assert "style=" not in page
+    assert "Select winner" not in page
+    assert f'action="/events/{event_id}/draws/{first_prize_id}/preview"' in page
+    assert f'action="/events/{event_id}/draws/{second_prize_id}/preview"' in page
+    assert 'aria-label="Edit' not in page
+    assert 'aria-label="Remove' not in page
+
+    preview = client.get(
+        f"/events/{event_id}/draw?preview={first_prize_id}&winner={entrant_id}"
+    ).text
+    assert "Confirm draw" not in preview
+    assert "<h2>Ada Lovelace</h2>" in preview
+    assert 'class="large-text secondary-text">Engine Co</p>' in preview
+    assert "<h3>Laptop</h3>" in preview
+    assert 'class="large-text secondary-text">Northwind</p>' in preview
+    assert 'class="extra primary"' in preview
+    assert 'class="extra tertiary"' in preview
+    assert 'class="extra error"' in preview
+    assert 'form="award-draw-form"' in preview
+    assert 'form="redraw-draw-form"' in preview
+    assert 'form="cancel-draw-form"' in preview
+    assert preview.index("Ada Lovelace") < preview.index("Engine Co")
+    assert preview.index("Engine Co") < preview.index("Laptop")
+    assert preview.index("Laptop") < preview.index("Northwind")
+    assert "Cancel" in preview
+    assert f'action="/events/{event_id}/draw"' in preview
+    assert 'class="modal padding large-width left-align draw-confirmation"' in preview
+    assert 'class="wrap small-space m8"' in preview
+    assert 'class="right-align m4"' in preview
+    assert 'class="wrap small-space top-margin s"' in preview
+    assert 'class="large primary"' in preview
+    assert 'class="large tertiary"' in preview
+    assert 'class="large error"' in preview
+    assert "absolute bottom" not in preview
+    assert "style=" not in preview
+    assert 'id="draw-confirmation"' in preview
+    assert 'data-auto-open="true"' in preview
+    assert "dialog.draw-confirmation[open]::backdrop" not in preview
+    assert (
+        preview.index("Award winner")
+        < preview.index("Redraw")
+        < preview.index("Cancel")
+    )
+
+
+def test_draw_search_filters_prize_names_and_sponsors(tmp_path):
+    app, store = create_app(tmp_path / "draw-search.sqlite3")
+    event_id = store.create_event("Awards")
+    store.add_entrant(event_id, "Ada Lovelace")
+    store.add_prize(event_id, "Laptop", "Northwind", "001")
+    store.add_prize(event_id, "Coffee basket", "Contoso", "002")
+    client = _test_client(app)
+
+    by_name = client.get(f"/events/{event_id}/draw/search?search=COFFEE").text
+    assert "Coffee basket" in by_name
+    assert "Laptop" not in by_name
+    assert f'action="/events/{event_id}/draws/2/preview"' in by_name
+    assert "# 002" in by_name
+
+    by_sponsor = client.get(f"/events/{event_id}/draw/search?search=northwind").text
+    assert "Laptop" in by_sponsor
+    assert "Coffee basket" not in by_sponsor
+
+    by_number = client.get(f"/events/{event_id}/draw/search?search=001").text
+    assert "Laptop" in by_number
+    assert "Coffee basket" not in by_number
+
+    no_matches = client.get(f"/events/{event_id}/draw/search?search=missing").text
+    assert "No prizes match your search." in no_matches
+
+
+def test_draw_page_button_opens_event_management_when_empty(tmp_path):
+    app, store = create_app(tmp_path / "empty-draw-page.sqlite3")
+    event_id = store.create_event("Awards")
+
+    page = _test_client(app).get(f"/events/{event_id}/draw").text
+
+    assert "No prizes are available to draw." in page
+    assert f'action="/events/{event_id}" method="get"' in page
+    assert 'type="submit" class="s12 responsive extra primary"' in page
+    assert "Manage event" in page
+    assert "Add a prize" not in page
+
+
+def test_empty_entrants_and_prizes_buttons_open_event_management(tmp_path):
+    app, store = create_app(tmp_path / "empty-management-pages.sqlite3")
+    event_id = store.create_event("Awards")
+    client = _test_client(app)
+
+    for section in ("entrants", "prizes"):
+        page = client.get(f"/events/{event_id}/{section}").text
+        assert "Manage event" in page
+        assert f'action="/events/{event_id}" method="get" class="s12"' in page
+        assert 'type="submit" class="responsive extra primary"' in page
+
+    assert (
+        "Manage event"
+        not in client.get(f"/events/{event_id}/entrants/search?search=missing").text
+    )
+    assert (
+        "Manage event"
+        not in client.get(f"/events/{event_id}/prizes/search?search=missing").text
+    )
+
+
+def test_awarded_prize_stays_in_draw_list_as_inert_last_item(tmp_path):
+    app, store = create_app(tmp_path / "awarded-prize-list.sqlite3")
+    event_id = store.create_event("Awards")
+    store.add_entrant(event_id, "Ada Lovelace")
+    awarded_prize_id = store.add_prize(event_id, "Laptop")
+    remaining_prize_id = store.add_prize(event_id, "Coffee basket")
+    client = _test_client(app)
+    client.post(f"/events/{event_id}/draws/{awarded_prize_id}/preview")
+    winner_id = store.latest_preview(event_id)["entrant_id"]
+
+    page = client.post(
+        f"/events/{event_id}/draws/{awarded_prize_id}/award",
+        data={"winner": winner_id},
+    ).text
+
+    assert "The draw is complete. The projector is updating now." not in page
+    assert 'class="s3 right-align">1 prize left</span>' in page
+    assert re.search(r'<button\b[^>]*\bdisabled(?:="")?[^>]*>Awarded</button>', page)
+    assert f'action="/events/{event_id}/draws/{awarded_prize_id}/preview"' not in page
+    assert page.index("Coffee basket") < page.index("Laptop")
+    assert f'action="/events/{event_id}/draws/{remaining_prize_id}/preview"' in page
+
+
+def test_awarded_prize_can_be_returned_to_pool_from_prizes_page(tmp_path):
+    app, store = create_app(tmp_path / "return-prize-to-pool.sqlite3")
+    event_id = store.create_event("Awards")
+    store.add_entrant(event_id, "Ada Lovelace")
+    prize_id = store.add_prize(event_id, "Laptop")
+    store.draw(event_id, prize_id, chooser=lambda entrants: entrants[0])
+    client = _test_client(app)
+
+    page = client.get(f"/events/{event_id}/prizes").text
+    dialog_id = f"return-prize-dialog-{prize_id}"
+    return_url = f"/events/{event_id}/prizes/{prize_id}/return"
+    assert "Return prize to pool?" in page
+    assert f'id="{dialog_id}"' in page
+    assert f'action="{return_url}"' in page
+    assert f'hx-post="{return_url}"' in page
+    assert "Awarded to Ada Lovelace" in page
+    assert "<strong>Laptop</strong>" in page
+    assert "<strong>Ada Lovelace</strong>" in page
+
+    returned = client.post(return_url, headers={"HX-Request": "true"})
+
+    assert "<!doctype html>" not in returned.text
+    assert f'id="prize-row-{prize_id}"' in returned.text
+    assert f'hx-get="/events/{event_id}/prizes/{prize_id}/edit"' in returned.text
+    assert f'hx-post="/events/{event_id}/prizes/{prize_id}/remove"' in returned.text
+    assert 'hx-swap-oob="outerHTML"' in returned.text
+    assert "1 available | 1 total" in returned.text
+    assert store.draw_history(event_id) == []
+    assert store.prizes(event_id)[0]["drawn"] == 0
+    assert store.entrants(event_id)[0]["eligible"] == 1
+
+    history_page = client.get(f"/events/{event_id}/history").text
+    assert "Laptop" not in history_page
+
+
+def test_projector_live_result_uses_htmx_fragment(tmp_path):
+    app, store = create_app(tmp_path / "projector-htmx.sqlite3")
+    event_id = store.create_event("Awards")
+    store.add_entrant(event_id, "Ada Lovelace", "Engine Co")
+    prize_id = store.add_prize(event_id, "Laptop", "Northwind")
+    client = _test_client(app)
+    client.post(f"/events/{event_id}/draws/{prize_id}/preview")
+
+    display = client.get(f"/events/{event_id}/display").text
+    assert f'hx-get="/events/{event_id}/display/latest-fragment"' in display
+    assert 'hx-trigger="every 1s"' in display
+
+    fragment = client.get(
+        f"/events/{event_id}/display/latest-fragment",
+        headers={"HX-Request": "true"},
+    ).text
+    assert "<!doctype html>" not in fragment
+    assert 'id="live-result"' in fragment
+    assert 'hx-swap="outerHTML"' in fragment
+    assert "Ada Lovelace" in fragment
+    assert "Laptop" in fragment
 
 
 def test_event_workflow_and_live_display(tmp_path):
@@ -88,12 +645,15 @@ def test_event_workflow_and_live_display(tmp_path):
     assert "Draw Center" in home.text
     assert 'href="/assets/fastprize-favicon.svg"' in home.text
     assert "/assets/fastprize-logo.svg" in home.text
-    assert "window.updateFastPrizeBrandTheme" in home.text
+    assert 'src="/assets/theme.js?v=2"' in home.text
+    assert 'src="/assets/interactions.js"' in home.text
     assert client.get("/assets/fastprize-logo.svg").status_code == 200
     assert client.get("/assets/fastprize-favicon.svg").status_code == 200
-    assert "left drawer large-padding max m l surface-container" in home.text
+    assert (
+        "left drawer large-padding max m l small-width surface-container" in home.text
+    )
     assert 'class="bottom-margin"' in home.text
-    assert 'style="--_margin: 0.25rem"' in home.text
+    assert 'class="tiny-margin bottom-margin"' in home.text
     assert (
         "Hats are for pulling rabbits, not folded slips. We do it pseudo-randomly."
         in home.text
@@ -105,40 +665,37 @@ def test_event_workflow_and_live_display(tmp_path):
     assert "beercss@5.0.3/dist/cdn/beer.min.css" in home.text
     assert "beercss@5.0.3/dist/cdn/beer.min.js" in home.text
     assert "htmx.org@" in home.text
-    assert "fonts.googleapis.com/css2?family=Roboto+Flex" in home.text
-    assert "--font:" in home.text
     assert (
         "material-dynamic-colors@1.1.4/dist/cdn/material-dynamic-colors.min.js"
         in home.text
     )
-    assert "window.setFastPrizeTheme" in home.text
+    assert 'data-theme-mode="toggle"' in home.text
+    assert 'data-theme-color="#009688"' in home.text
+    assert 'data-theme-color="#ffc107"' in home.text
+    assert 'data-theme-color="#0277bd"' in home.text
     assert '<body class="light"' in home.text
     assert "<style" not in home.text.lower()
     assert "class-=" not in home.text
-    assert "font-variation-settings: 'FILL' 0" in home.text
 
     events_page = client.get("/events")
     assert events_page.status_code == 200
-    assert events_page.text.count('<hr class="medium-divider">') == 3
-    divider = '<hr class="medium-divider">'
-    first_divider = events_page.text.index(divider)
-    second_divider = events_page.text.index(divider, first_divider + len(divider))
-    third_divider = events_page.text.index(divider, second_divider + len(divider))
-    assert events_page.text.index("Choose your event.") < first_divider
-    assert first_divider < events_page.text.index("Create an event")
-    assert events_page.text.index("Create an event") < second_divider
-    assert second_divider < events_page.text.index("Your events")
-    assert events_page.text.index("Your events") < third_divider
-    assert "EVENTS" not in events_page.text
-    assert 'class="vertical bottom-padding"' in events_page.text
-    assert 'class="grid middle-align bottom-padding"' in events_page.text
-    assert (
-        "font-variation-settings: 'FILL' 0; color: var(--primary)" in events_page.text
+    assert "<hr" not in events_page.text
+    assert events_page.text.count("card padding primary-container small-round") == 1
+    assert events_page.text.count("card padding secondary-container small-round") == 2
+    assert "card padding tertiary-container small-round" not in events_page.text
+    assert events_page.text.index("Choose your event.") < events_page.text.index(
+        "Create an event"
     )
+    assert events_page.text.index("Create an event") < events_page.text.index(
+        "Your events"
+    )
+    assert "EVENTS" not in events_page.text
+    assert 'class="grid middle-align bottom-padding"' in events_page.text
+    assert 'class="primary-text"' in events_page.text
     assert "Create event" in events_page.text
-    assert 'class="s12 m7 l9 field label border round fill extra"' in events_page.text
+    assert 'class="s12 m7 field label border fill round extra"' in events_page.text
     assert '<label for="event-name">Event name</label>' in events_page.text
-    assert 'class="s12 m5 l3 responsive fill extra"' in events_page.text
+    assert 'class="s12 m5 responsive extra primary"' in events_page.text
     assert "<i>add</i><span>Create event</span>" in events_page.text
     assert '<footer class="fill fixed s">' in events_page.text
     assert 'aria-label="Events"' in events_page.text
@@ -153,11 +710,32 @@ def test_event_workflow_and_live_display(tmp_path):
     assert "Launch day" in workspace.text
     assert "EVENT MANAGEMENT" not in workspace.text
     assert "Event tasks" not in workspace.text
+    assert "<div>Live display</div>" in workspace.text
+    assert "Public display" not in workspace.text
     assert "Open projector display" not in workspace.text
     assert 'class="active bottom-margin"' in workspace.text
-    assert workspace.text.count('class="s12 m6 l6 card padding fill small-round"') == 2
-    assert workspace.text.count("<strong>0</strong>") == 4
-    assert workspace.text.count('class="vertical bottom-padding"') == 2
+    assert (
+        'class="card padding primary-container small-round vertical bottom-padding"'
+        in workspace.text
+    )
+    assert (
+        workspace.text.count("card padding secondary-container small-round vertical")
+        == 5
+    )
+    assert (
+        workspace.text.count('class="s6 card padding tertiary-container small-round"')
+        == 4
+    )
+    assert (
+        '<section class="s12 m6 card padding secondary-container small-round vertical bottom-padding"><h2 class="small">Entrants</h2>'
+        in workspace.text
+    )
+    assert (
+        '<section class="s12 m6 card padding secondary-container small-round vertical bottom-padding"><h2 class="small">Prizes</h2>'
+        in workspace.text
+    )
+    assert workspace.text.count('<h3 class="large-text">0</h3>') == 4
+    assert 'class="grid small-space"' in workspace.text
     assert all(
         label in workspace.text
         for label in ("Entrants", "total", "eligible", "Prizes", "available")
@@ -175,7 +753,8 @@ def test_event_workflow_and_live_display(tmp_path):
     assert "Choose whether winners can be selected again." not in workspace.text
     assert "Save setting" not in workspace.text
     assert 'class="s12 responsive extra error"' in workspace.text
-    assert "<i>delete</i><span>Clear all entrants and prizes</span>" in workspace.text
+    assert "<i>delete</i><span>Clear Database</span>" in workspace.text
+    assert "<i>delete_forever</i><span>Delete event</span>" in workspace.text
     assert "Manage" in workspace.text
     assert "Overview" not in workspace.text
     event_management_page = client.get("/events").text
@@ -193,8 +772,9 @@ def test_event_workflow_and_live_display(tmp_path):
     }
     selected_home = client.get("/").text
     for section, path in page_paths.items():
-        navigation_path = "/events" if section == "events" else path
-        assert f'href="{navigation_path}"' in workspace.text
+        if section != "import":
+            navigation_path = "/events" if section == "events" else path
+            assert f'href="{navigation_path}"' in workspace.text
         page = client.get(path)
         assert page.status_code == 200
         assert "Launch day" in page.text
@@ -205,7 +785,10 @@ def test_event_workflow_and_live_display(tmp_path):
     assert "Prizes CSV" in import_page.text
     assert "Import selected files" in import_page.text
     assert import_page.text.count('type="file"') == 2
-    assert import_page.text.count('onclick="this.nextElementSibling.click()"') == 2
+    assert 'for="entrants-file"' in import_page.text
+    assert 'for="prizes-file"' in import_page.text
+    assert 'data-filename-target="entrants-file-name"' in import_page.text
+    assert 'data-filename-target="prizes-file-name"' in import_page.text
     assert import_page.text.count("attach_file") == 2
     assert import_page.text.count('type="submit"') == 1
 
@@ -335,6 +918,19 @@ def test_event_workflow_and_live_display(tmp_path):
         data={"winner": winner_id},
     )
     assert award_page.status_code == 200
+    assert "The draw is complete. The projector is updating now." not in award_page.text
+    assert re.search(
+        r'<button\b[^>]*\bdisabled(?:="")?[^>]*>Awarded</button>', award_page.text
+    )
+    assert (
+        f'action="/events/{event_id}/draws/{prize_id}/preview"' not in award_page.text
+    )
+    ordered_prizes = store.prizes(event_id)
+    prize_positions = [
+        award_page.text.index(f"<strong>{prize['prize_name']}</strong>")
+        for prize in ordered_prizes
+    ]
+    assert prize_positions == sorted(prize_positions)
     live_result = client.get(f"/events/{event_id}/display/latest")
     assert live_result.status_code == 200
     assert (
@@ -370,17 +966,120 @@ def test_operator_can_edit_and_remove_entrants_and_prizes(tmp_path):
 
     client.post(
         f"/events/{event_id}/prizes",
-        data={"name": "Laptop", "sponsor": "Northwind"},
+        data={"name": "Laptop", "sponsor": "Northwind", "number": "0007"},
     )
     prize_id = store.prizes(event_id)[0]["id"]
+    assert store.prizes(event_id)[0]["number"] == "0007"
     edited_prize = client.post(
         f"/events/{event_id}/prizes/{prize_id}/edit",
-        data={"name": "Tablet", "sponsor": "Contoso"},
+        data={"name": "Tablet", "sponsor": "Contoso", "number": "0012"},
     )
     assert "Tablet" in edited_prize.text
     assert store.prizes(event_id)[0]["sponsor"] == "Contoso"
+    assert store.prizes(event_id)[0]["number"] == "0012"
     client.post(f"/events/{event_id}/prizes/{prize_id}/remove")
     assert store.prizes(event_id) == []
+
+
+def test_prize_mutations_return_htmx_fragments(tmp_path):
+    app, store = create_app(tmp_path / "prize-htmx.sqlite3")
+    event_id = store.create_event("Awards")
+    prize_id = store.add_prize(event_id, "Laptop", "Northwind", "0007")
+    client = _test_client(app)
+    headers = {"HX-Request": "true"}
+
+    page = client.get(f"/events/{event_id}/prizes").text
+    assert 'id="prize-number"' in page
+    assert 'class="grid middle-align small-space top-margin bottom-margin"' in page
+    assert '<small class="s6"># 0007</small>' in page
+    assert page.index('<small class="s6"># 0007</small>') < page.index(
+        f'hx-get="/events/{event_id}/prizes/{prize_id}/edit"'
+    )
+    assert "style=" not in page
+    assert 'id="prize-counts"' in page
+    assert (
+        'class="s12 m6 l6 card padding tertiary-container small-round vertical"' in page
+    )
+    assert f'id="prize-row-{prize_id}"' in page
+    assert f'hx-get="/events/{event_id}/prizes/{prize_id}/edit"' in page
+    assert f'hx-post="/events/{event_id}/prizes/{prize_id}/remove"' in page
+    prize_dialog = f"remove-prize-dialog-{prize_id}"
+    assert f'id="{prize_dialog}"' in page
+    assert 'class="modal padding medium-width left-align"' in page
+    assert 'aria-label="Confirm removing Laptop"' in page
+    assert f'aria-controls="{prize_dialog}"' in page
+    assert page.count(f'data-ui="#{prize_dialog}"') == 2
+    assert f'action="/events/{event_id}/prizes/{prize_id}/remove"' in page
+    assert f'action="/events/{event_id}/draws/{prize_id}"' not in page
+    assert "<i>casino</i><span>Draw</span>" not in page
+    assert f'href="/events/{event_id}/draw"' in page
+
+    edit_form = client.get(f"/events/{event_id}/prizes/{prize_id}/edit").text
+    assert "style=" not in edit_form
+    assert 'name="name" value="Laptop"' in edit_form
+    assert 'name="sponsor" value="Northwind"' in edit_form
+    assert 'name="number" value="0007"' in edit_form
+    assert edit_form.count('class="field round fill border"') == 3
+    assert 'class="circle primary"' in edit_form
+    assert 'class="circle"' in edit_form
+    assert 'aria-label="Save prize"' in edit_form
+    assert 'aria-label="Cancel edit"' in edit_form
+    assert f'hx-post="/events/{event_id}/prizes/{prize_id}/edit"' in edit_form
+
+    edited = client.post(
+        f"/events/{event_id}/prizes/{prize_id}/edit",
+        data={"name": "Tablet", "sponsor": "Contoso", "number": "0009"},
+        headers=headers,
+    )
+    assert "<!doctype html>" not in edited.text
+    assert f'id="prize-row-{prize_id}"' in edited.text
+    assert "Tablet" in edited.text
+    assert '<small class="s6"># 0009</small>' in edited.text
+    assert store.prizes(event_id)[0]["number"] == "0009"
+    assert "Prize updated." not in edited.text
+
+    removed = client.post(
+        f"/events/{event_id}/prizes/{prize_id}/remove",
+        headers=headers,
+    )
+    assert "<!doctype html>" not in removed.text
+    assert 'hx-swap-oob="outerHTML"' in removed.text
+    assert "0 available | 0 total" in removed.text
+    assert "Prize removed." not in removed.text
+    assert store.prizes(event_id) == []
+
+
+def test_prize_search_filters_names_and_sponsors(tmp_path):
+    app, store = create_app(tmp_path / "prize-search.sqlite3")
+    event_id = store.create_event("Awards")
+    store.add_prize(event_id, "Laptop", "Northwind")
+    store.add_prize(event_id, "Coffee basket", "Contoso", "0042")
+    client = _test_client(app)
+
+    page = client.get(f"/events/{event_id}/prizes").text
+    assert 'id="prize-search"' in page
+    assert 'class="s12 m6 field large prefix round fill border active"' in page
+    assert f'hx-get="/events/{event_id}/prizes/search"' in page
+    assert 'hx-target="#prize-list"' in page
+
+    by_name = client.get(f"/events/{event_id}/prizes/search?search=COFFEE").text
+    assert "Coffee basket" in by_name
+    assert "Laptop" not in by_name
+
+    by_sponsor = client.get(f"/events/{event_id}/prizes/search?search=northwind").text
+    assert "Laptop" in by_sponsor
+    assert "Coffee basket" not in by_sponsor
+
+    by_number = client.get(f"/events/{event_id}/prizes/search?search=0042").text
+    assert "Coffee basket" in by_number
+    assert "# 0042" in by_number
+    assert "Laptop" not in by_number
+
+    no_matches = client.get(f"/events/{event_id}/prizes/search?search=missing").text
+    assert "No prizes match your search." in no_matches
+    assert (
+        '<p class="s12 secondary-text">No prizes match your search.</p>' in no_matches
+    )
 
 
 def test_operator_can_clear_all_entrants_and_prizes(tmp_path):
@@ -412,7 +1111,24 @@ def test_operator_can_clear_all_entrants_and_prizes(tmp_path):
     clear_form = reset_page.text.split(f'action="/events/{event_id}/clear-data"', 1)[
         1
     ].split(">", 1)[0]
-    assert 'class="s12 grid"' in clear_form
+    assert 'method="post"' in clear_form
     assert "Cleared all entrants and prizes." not in reset_page.text
+    assert store.entrants(event_id) == []
+    assert store.prizes(event_id) == []
+
+
+def test_operator_can_delete_event_and_returns_to_events(tmp_path):
+    app, store = create_app(tmp_path / "delete-event.sqlite3")
+    client = _test_client(app)
+    client.cli.follow_redirects = False
+    event_id = store.create_event("Awards")
+    store.add_entrant(event_id, "Ada Lovelace")
+    store.add_prize(event_id, "Laptop")
+
+    response = client.post(f"/events/{event_id}/delete")
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/events"
+    assert store.get_event(event_id) is None
     assert store.entrants(event_id) == []
     assert store.prizes(event_id) == []

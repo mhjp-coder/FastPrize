@@ -1,22 +1,23 @@
 from fasthtml.common import (
     H1,
     H2,
+    H3,
     A,
     Article,
     Button,
+    Dialog,
     Div,
     Form,
-    Hr,
     HTTPException,
     I,
     Input,
     Label,
+    Nav,
     P,
     RedirectResponse,
     Request,
     Section,
     Span,
-    Strong,
 )
 
 from fastprize.ui import (
@@ -75,11 +76,15 @@ def register_routes(rt, store):
                             href=workspace_href,
                             cls="button primary m6 responsive extra",
                         ),
-                        A(
-                            I("present_to_all"),
-                            Span("Open projector display"),
-                            href=f"/events/{selected_event['id']}/display",
-                            cls="button secondary m6 responsive extra",
+                        Button(
+                            I("qr_code_2"),
+                            Span("Live display"),
+                            type="button",
+                            aria_haspopup="dialog",
+                            hx_get=f"/events/{selected_event['id']}/display-link",
+                            hx_target="#display-link-modal",
+                            hx_swap="innerHTML",
+                            cls="tertiary m6 responsive extra",
                         ),
                         cls="grid middle-align",
                     ),
@@ -87,12 +92,12 @@ def register_routes(rt, store):
                 ),
                 Div(
                     Article(
-                        P(Strong(str(eligible_count))),
+                        H2(str(eligible_count), cls="small"),
                         P("eligible entrants"),
                         cls="s6 m6 l6 card padding fill small-round",
                     ),
                     Article(
-                        P(Strong(str(available_count))),
+                        H2(str(available_count), cls="small"),
                         P("prizes available"),
                         cls="s6 m6 l6 card padding fill small-round",
                     ),
@@ -101,18 +106,27 @@ def register_routes(rt, store):
             )
         return document(
             "FastPrize | Draw Center",
-            Div(
+            Article(
                 H1("Draw Center", cls="small"),
                 P(
                     "Hats are for pulling rabbits, not folded slips. We do it pseudo-randomly."
                 ),
-                cls="vertical",
+                P(
+                    "Choose an event to open its workspace, or create one to get started.",
+                )
+                if not selected_event
+                else "",
+                cls="card padding primary-container small-round vertical bottom-margin",
             ),
-            selected_panel
-            or P(
-                "Choose an event to open its workspace, or create one to get started.",
-                cls="surface-variant padding",
-            ),
+            selected_panel or "",
+            A(
+                I("add"),
+                Span("Create event"),
+                href="/events",
+                cls="button primary responsive extra bottom-margin",
+            )
+            if not selected_event and not store.list_events()
+            else "",
             event_id=selected_event["id"] if selected_event else None,
             event_name=selected_event["name"] if selected_event else None,
         )
@@ -122,57 +136,55 @@ def register_routes(rt, store):
         selected_event = _selected_event(req, store)
         events = store.list_events()
         event_links = [
-            Article(
-                A(
-                    H2(event["name"], cls="small"),
-                    href=f"/events/{event['id']}",
-                    cls="link responsive center-align",
-                ),
-                cls="s12 m6 l4 card padding small-round",
+            A(
+                H3(event["name"], cls="small"),
+                href=f"/events/{event['id']}",
+                cls="s12 m6 l4 link responsive center-align padding surface-container small-round",
             )
             for event in events
         ]
         return document(
             "FastPrize | Events",
-            Div(
+            Article(
                 H1("Choose your event.", cls="small"),
                 P("Pick up where the suspense left off, or start a new one."),
-                cls="vertical bottom-padding",
+                cls="card padding primary-container small-round vertical",
             ),
-            Hr(cls="medium-divider"),
-            H2("Create an event", cls="small"),
-            Form(
-                Div(
-                    Input(
-                        id="event-name",
-                        name="name",
-                        required=True,
-                        type="text",
+            Article(
+                H2("Create an event", cls="small"),
+                Form(
+                    Div(
+                        Input(
+                            id="event-name",
+                            name="name",
+                            required=True,
+                            type="text",
+                        ),
+                        Label("Event name", fr="event-name"),
+                        cls="s12 m7 field label border fill round extra",
                     ),
-                    Label("Event name", fr="event-name"),
-                    cls="m7 field label border round fill extra",
+                    Button(
+                        I("add"),
+                        Span("Create event"),
+                        type="submit",
+                        cls="s12 m5 responsive extra primary",
+                    ),
+                    action="/events",
+                    method="post",
+                    cls="grid bottom-padding",
                 ),
-                Button(
-                    I("add"),
-                    Span("Create event"),
-                    type="submit",
-                    cls="m5 responsive fill extra",
-                ),
-                action="/events",
-                method="post",
-                cls="grid bottom-padding",
+                cls="card padding secondary-container small-round vertical",
             ),
-            Hr(cls="medium-divider"),
-            Section(
+            Article(
                 H2("Your events", cls="small"),
                 Div(*event_links, cls="grid")
                 if event_links
                 else P(
                     "No events yet. Create one to start adding entrants and prizes.",
-                    cls="surface-variant padding",
+                    cls="secondary-text",
                 ),
+                cls="card padding secondary-container small-round vertical",
             ),
-            Hr(cls="medium-divider"),
             event_id=selected_event["id"] if selected_event else None,
             event_name=selected_event["name"] if selected_event else None,
             active_link="events",
@@ -199,99 +211,296 @@ def register_routes(rt, store):
         clear_notice = message if status == "data-cleared" else ""
         return document(
             f"FastPrize | {event['name']} | Events",
-            Div(
+            Article(
                 H1(event["name"], cls="small"),
-                Div(
-                    Article(
-                        H2("Entrants", cls="small"),
-                        Div(
-                            Div(P(Strong(str(len(entrants)))), P("total"), cls="s6"),
-                            Div(
-                                P(Strong(str(eligible_count))), P("eligible"), cls="s6"
-                            ),
-                            cls="grid",
+                cls="card padding primary-container small-round vertical bottom-padding",
+            ),
+            Div(
+                Section(
+                    H2("Entrants", cls="small"),
+                    Div(
+                        Article(
+                            H3(str(len(entrants)), cls="extra"),
+                            P("total"),
+                            cls="s6 card padding tertiary-container small-round",
                         ),
-                        cls="s12 m6 l6 card padding fill small-round",
-                    ),
-                    Article(
-                        H2("Prizes", cls="small"),
-                        Div(
-                            Div(P(Strong(str(len(prizes)))), P("total"), cls="s6"),
-                            Div(
-                                P(Strong(str(available_count))),
-                                P("available"),
-                                cls="s6",
-                            ),
-                            cls="grid",
+                        Article(
+                            H3(str(eligible_count), cls="extra"),
+                            P("eligible"),
+                            cls="s6 card padding tertiary-container small-round",
                         ),
-                        cls="s12 m6 l6 card padding fill small-round",
+                        cls="grid",
                     ),
-                    cls="grid",
+                    cls="s12 m6 card padding secondary-container small-round vertical bottom-padding",
                 ),
-                cls="vertical bottom-padding",
+                Section(
+                    H2("Prizes", cls="small"),
+                    Div(
+                        Article(
+                            H3(str(len(prizes)), cls="extra"),
+                            P("total"),
+                            cls="s6 card padding tertiary-container small-round",
+                        ),
+                        Article(
+                            H3(str(available_count), cls="extra"),
+                            P("available"),
+                            cls="s6 card padding tertiary-container small-round",
+                        ),
+                        cls="grid",
+                    ),
+                    cls="s12 m6 card padding secondary-container small-round vertical bottom-padding",
+                ),
+                Section(
+                    H2("Import CSV", cls="small bottom-padding"),
+                    Form(
+                        Div(
+                            Div(
+                                H3("Entrants", cls="small"),
+                                Button(
+                                    I("info"),
+                                    type="button",
+                                    title="Entrant CSV requirements",
+                                    aria_label="Entrant CSV requirements",
+                                    aria_haspopup="dialog",
+                                    aria_controls="entrants-csv-info",
+                                    data_ui="#entrants-csv-info",
+                                    cls="circle transparent",
+                                ),
+                                cls="horizontal middle-align small-space bottom-margin",
+                            ),
+                            Dialog(
+                                H2("Entrants CSV", cls="small"),
+                                P("Required: name. Optional: organization."),
+                                Nav(
+                                    Button(
+                                        "Close",
+                                        type="button",
+                                        data_ui="#entrants-csv-info",
+                                        cls="text",
+                                    ),
+                                    cls="right-align",
+                                ),
+                                id="entrants-csv-info",
+                                aria_label="Entrant CSV requirements",
+                                data_close_on_backdrop="true",
+                                cls="modal padding medium-width left-align",
+                            ),
+                            Label(
+                                I("attach_file"),
+                                Span("Entrants CSV", id="entrants-file-name"),
+                                fr="entrants-file",
+                                cls="button secondary",
+                            ),
+                            Input(
+                                id="entrants-file",
+                                type="file",
+                                name="entrants_file",
+                                accept=".csv,text/csv",
+                                hidden=True,
+                                data_filename_target="entrants-file-name",
+                            ),
+                            cls="s12 m6 l6 vertical",
+                        ),
+                        Div(
+                            Div(
+                                H3("Prizes", cls="small"),
+                                Button(
+                                    I("info"),
+                                    type="button",
+                                    title="Prize CSV requirements",
+                                    aria_label="Prize CSV requirements",
+                                    aria_haspopup="dialog",
+                                    aria_controls="prizes-csv-info",
+                                    data_ui="#prizes-csv-info",
+                                    cls="circle transparent",
+                                ),
+                                cls="horizontal middle-align small-space bottom-margin",
+                            ),
+                            Dialog(
+                                H2("Prizes CSV", cls="small"),
+                                P(
+                                    "Required: prize_name. Optional: sponsor, "
+                                    "number (or prize_number)."
+                                ),
+                                Nav(
+                                    Button(
+                                        "Close",
+                                        type="button",
+                                        data_ui="#prizes-csv-info",
+                                        cls="text",
+                                    ),
+                                    cls="right-align",
+                                ),
+                                id="prizes-csv-info",
+                                aria_label="Prize CSV requirements",
+                                data_close_on_backdrop="true",
+                                cls="modal padding medium-width left-align",
+                            ),
+                            Label(
+                                I("attach_file"),
+                                Span("Prizes CSV", id="prizes-file-name"),
+                                fr="prizes-file",
+                                cls="button secondary",
+                            ),
+                            Input(
+                                id="prizes-file",
+                                type="file",
+                                name="prizes_file",
+                                accept=".csv,text/csv",
+                                hidden=True,
+                                data_filename_target="prizes-file-name",
+                            ),
+                            cls="s12 m6 l6 vertical",
+                        ),
+                        Button(
+                            I("upload_file"),
+                            "Import selected files",
+                            type="submit",
+                            cls="s12 responsive extra primary",
+                        ),
+                        action=f"/events/{event_id}/import",
+                        method="post",
+                        enctype="multipart/form-data",
+                        cls="grid small-space",
+                    ),
+                    id="csv-import",
+                    cls="s12 card padding secondary-container small-round vertical bottom-padding",
+                ),
+                cls="grid small-space",
             ),
             P(message, cls="tertiary-container padding")
             if message and not clear_notice
             else "",
-            Section(
-                H2("Winner eligibility", cls="small"),
-                Form(
-                    Label(
-                        Input(
-                            type="checkbox",
-                            name="remove_winners",
-                            id="remove_winners",
-                            value="1",
-                            checked=bool(event["remove_winners"]),
-                            aria_label="Remove winners from future draws",
-                            hx_post=f"/events/{event_id}/settings",
-                            hx_trigger="change",
-                            hx_target="#remove-winners-help",
-                            hx_swap="outerHTML",
-                        ),
-                        Span(),
-                        cls="switch",
-                    ),
-                    P(
-                        "Drawn winners are removed from future draws."
-                        if event["remove_winners"]
-                        else "Previous winners remain eligible.",
-                        id="remove-winners-help",
-                        cls="large-text secondary-text",
-                    ),
-                    action=f"/events/{event_id}/settings",
-                    method="post",
-                    cls="horizontal middle-align",
-                ),
-                cls="vertical bottom-padding",
-            ),
-            Section(
-                H2("Data management", cls="small"),
-                P("Remove all entrants and prizes from this event."),
-                Div(
+            Div(
+                Section(
+                    H2("Winner eligibility", cls="small"),
                     Form(
-                        Button(
-                            I("delete"),
-                            Span("Clear all entrants and prizes"),
-                            type="submit",
-                            cls="s12 responsive extra error",
+                        Label(
+                            Input(
+                                type="checkbox",
+                                name="remove_winners",
+                                id="remove_winners",
+                                value="1",
+                                checked=bool(event["remove_winners"]),
+                                aria_label="Remove winners from future draws",
+                                hx_post=f"/events/{event_id}/settings",
+                                hx_trigger="change",
+                                hx_target="#remove-winners-help",
+                                hx_swap="outerHTML",
+                            ),
+                            Span(),
+                            cls="switch",
                         ),
-                        action=f"/events/{event_id}/clear-data",
+                        P(
+                            "Drawn winners are removed from future draws."
+                            if event["remove_winners"]
+                            else "Previous winners remain eligible.",
+                            id="remove-winners-help",
+                            cls="large-text secondary-text",
+                        ),
+                        action=f"/events/{event_id}/settings",
                         method="post",
-                        onsubmit="return confirm('Clear all entrants and prizes? This cannot be undone.');",
-                        cls="s12 grid",
+                        cls="horizontal middle-align",
                     ),
-                    Span(
-                        clear_notice,
-                        cls="s12 chip tertiary",
-                        role="status",
-                        aria_live="polite",
-                    )
-                    if clear_notice
-                    else "",
-                    cls="grid middle-align",
+                    cls="s12 m6 card padding secondary-container small-round vertical bottom-padding",
                 ),
-                cls="vertical",
+                Section(
+                    H2("Data management", cls="small"),
+                    P("Remove all entrants and prizes from this event."),
+                    Div(
+                        Div(
+                            Button(
+                                I("delete"),
+                                Span("Clear Data"),
+                                type="button",
+                                aria_haspopup="dialog",
+                                aria_controls="clear-database-dialog",
+                                data_ui="#clear-database-dialog",
+                                cls="s12 responsive extra error",
+                            ),
+                            Dialog(
+                                H2("Clear database?", cls="small"),
+                                P(
+                                    "This removes all entrants and prizes from this event. This cannot be undone."
+                                ),
+                                Nav(
+                                    Button(
+                                        "Cancel",
+                                        type="button",
+                                        data_ui="#clear-database-dialog",
+                                        cls="text",
+                                    ),
+                                    Form(
+                                        Button(
+                                            I("delete"),
+                                            Span("Clear Database"),
+                                            type="submit",
+                                            cls="error",
+                                        ),
+                                        action=f"/events/{event_id}/clear-data",
+                                        method="post",
+                                    ),
+                                    cls="horizontal",
+                                ),
+                                id="clear-database-dialog",
+                                aria_label="Confirm clearing event data",
+                                cls="modal padding medium-width",
+                            ),
+                            cls="s12 m6",
+                        ),
+                        Div(
+                            Button(
+                                I("delete_forever"),
+                                Span("Delete event"),
+                                type="button",
+                                aria_haspopup="dialog",
+                                aria_controls="delete-event-dialog",
+                                data_ui="#delete-event-dialog",
+                                cls="s12 responsive extra error",
+                            ),
+                            Dialog(
+                                H2("Delete event?", cls="small"),
+                                P(
+                                    "This permanently deletes the event, its entrants, prizes, and draw history. This cannot be undone."
+                                ),
+                                Nav(
+                                    Button(
+                                        "Cancel",
+                                        type="button",
+                                        data_ui="#delete-event-dialog",
+                                        cls="text",
+                                    ),
+                                    Form(
+                                        Button(
+                                            I("delete_forever"),
+                                            Span("Delete event"),
+                                            type="submit",
+                                            cls="error",
+                                        ),
+                                        action=f"/events/{event_id}/delete",
+                                        method="post",
+                                    ),
+                                    cls="horizontal",
+                                ),
+                                id="delete-event-dialog",
+                                aria_label="Confirm deleting this event",
+                                cls="modal padding medium-width",
+                            ),
+                            cls="s12 m6",
+                        ),
+                        Span(
+                            clear_notice,
+                            cls="s12 chip tertiary",
+                            role="status",
+                            aria_live="polite",
+                        )
+                        if clear_notice
+                        else "",
+                        cls="grid middle-align",
+                    ),
+                    cls="s12 m6 card padding secondary-container small-round vertical",
+                ),
+                cls="grid small-space",
             ),
             event_id=event_id,
             event_name=event["name"],
@@ -318,3 +527,8 @@ def register_routes(rt, store):
     def clear_all_data(event_id: int):
         store.clear_all_event_data(event_id)
         return redirect_event(event_id, "data-cleared")
+
+    @rt("/events/{event_id}/delete", methods=["POST"])
+    def delete_event(event_id: int):
+        store.delete_event(event_id)
+        return RedirectResponse("/events", status_code=303)

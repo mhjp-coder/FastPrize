@@ -18,12 +18,26 @@ def test_csv_import_deduplicates_entrants_and_keeps_prize_copies(store):
     )
     prizes = store.import_prizes(
         event_id,
-        "prize_name,sponsor\nTravel voucher,Northwind\nTravel voucher,Northwind\n",
+        "prize_name,sponsor,number\nTravel voucher,Northwind,007\n"
+        "Travel voucher,Northwind,008\n",
     )
 
     assert (entrants.added, entrants.duplicates, entrants.errors) == (2, 1, ())
     assert prizes.added == 2
     assert len(store.prizes(event_id)) == 2
+    assert [prize["number"] for prize in store.prizes(event_id)] == ["007", "008"]
+
+
+def test_prize_csv_import_accepts_prize_number_header(store):
+    event_id = store.create_event("Awards")
+
+    report = store.import_prizes(
+        event_id,
+        "prize_name,sponsor,prize_number\nLaptop,Northwind,0042\n",
+    )
+
+    assert report.added == 1
+    assert store.prizes(event_id)[0]["number"] == "0042"
 
 
 def test_csv_import_reports_required_name_errors(store):
@@ -80,6 +94,22 @@ def test_draw_cannot_award_a_prize_twice_or_cross_events(store):
         store.draw(second_event, prize_id)
 
 
+def test_return_prize_to_pool_removes_its_draw_history(store):
+    event_id = store.create_event("Awards")
+    entrant_id = store.add_entrant(event_id, "Ada Lovelace")
+    prize_id = store.add_prize(event_id, "Laptop")
+    store.draw(event_id, prize_id, chooser=lambda entrants: entrants[0])
+    assert store.entrants(event_id)[0]["eligible"] == 0
+
+    assert store.return_prize_to_pool(event_id, prize_id)
+
+    assert store.prizes(event_id)[0]["drawn"] == 0
+    assert store.entrants(event_id)[0]["id"] == entrant_id
+    assert store.entrants(event_id)[0]["eligible"] == 1
+    assert store.draw_history(event_id) == []
+    assert not store.return_prize_to_pool(event_id, prize_id)
+
+
 def test_draw_snapshots_survive_entrant_removal(store):
     event_id = store.create_event("Awards")
     preview_entrant = store.add_entrant(event_id, "Ada Lovelace")
@@ -121,6 +151,19 @@ def test_clear_all_event_data_removes_entrants_and_prizes(store):
     assert store.prizes(event_id) == []
 
 
+def test_delete_event_removes_event_and_cascades_data(store):
+    event_id = store.create_event("Awards")
+    store.add_entrant(event_id, "Ada Lovelace")
+    store.add_prize(event_id, "Laptop")
+
+    assert store.delete_event(event_id)
+
+    assert store.get_event(event_id) is None
+    assert store.entrants(event_id) == []
+    assert store.prizes(event_id) == []
+    assert not store.delete_event(event_id)
+
+
 def test_legacy_prize_name_column_is_migrated(tmp_path):
     db_path = tmp_path / "legacy.sqlite3"
     legacy_db = database(str(db_path))
@@ -140,3 +183,5 @@ def test_legacy_prize_name_column_is_migrated(tmp_path):
     assert "prize_name" in store.db.t.prizes.columns_dict
     assert "name" not in store.db.t.prizes.columns_dict
     assert store.db.t.prizes(as_cls=False)[0]["prize_name"] == "Laptop"
+    assert "number" in store.db.t.prizes.columns_dict
+    assert store.db.t.prizes(as_cls=False)[0]["number"] == ""

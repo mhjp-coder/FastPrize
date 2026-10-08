@@ -46,6 +46,7 @@ class PrizeDrawStore:
                 event_id INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
                 prize_name TEXT NOT NULL,
                 sponsor TEXT NOT NULL DEFAULT '',
+                number TEXT NOT NULL DEFAULT '',
                 drawn INTEGER NOT NULL DEFAULT 0
             )""",
             """CREATE TABLE IF NOT EXISTS draws (
@@ -80,6 +81,8 @@ class PrizeDrawStore:
         columns = self.db.t.prizes.columns_dict
         if "prize_name" not in columns and "name" in columns:
             self.db.q("ALTER TABLE prizes RENAME COLUMN name TO prize_name")
+        if "number" not in self.db.t.prizes.columns_dict:
+            self.db.q("ALTER TABLE prizes ADD COLUMN number TEXT NOT NULL DEFAULT ''")
 
     @staticmethod
     def _one(table, where: str, where_args: tuple) -> dict | None:
@@ -117,6 +120,12 @@ class PrizeDrawStore:
     def get_event(self, event_id: int) -> dict | None:
         return self._one(self.db.t.events, "id = ?", (event_id,))
 
+    def delete_event(self, event_id: int) -> bool:
+        if self.get_event(event_id) is None:
+            return False
+        self.db.t.events.delete(event_id)
+        return True
+
     def set_remove_winners(self, event_id: int, remove_winners: bool) -> None:
         self.db.t.events.update({"id": event_id, "remove_winners": int(remove_winners)})
 
@@ -136,13 +145,21 @@ class PrizeDrawStore:
         )
         return bool(entrant)
 
-    def add_prize(self, event_id: int, name: str, sponsor: str = "") -> int:
+    def add_prize(
+        self, event_id: int, name: str, sponsor: str = "", number: str = ""
+    ) -> int:
         name = " ".join(name.split())
         sponsor = " ".join(sponsor.split())
+        number = " ".join(number.split())
         if not name:
             raise ValueError("Prize name is required")
         prize = self.db.t.prizes.insert(
-            {"event_id": event_id, "prize_name": name, "sponsor": sponsor}
+            {
+                "event_id": event_id,
+                "prize_name": name,
+                "sponsor": sponsor,
+                "number": number,
+            }
         )
         return prize["id"]
 
@@ -173,11 +190,29 @@ class PrizeDrawStore:
                 "An entrant with that name and organization already exists"
             ) from error
 
+    def toggle_entrant_eligibility(self, event_id: int, entrant_id: int) -> bool:
+        entrant = self._one(
+            self.db.t.entrants,
+            "event_id = ? AND id = ?",
+            (event_id, entrant_id),
+        )
+        if entrant is None:
+            return False
+        entrant.update(eligible=not entrant["eligible"])
+        self.db.t.entrants.update(entrant)
+        return True
+
     def update_prize(
-        self, event_id: int, prize_id: int, name: str, sponsor: str = ""
+        self,
+        event_id: int,
+        prize_id: int,
+        name: str,
+        sponsor: str = "",
+        number: str = "",
     ) -> bool:
         name = " ".join(name.split())
         sponsor = " ".join(sponsor.split())
+        number = " ".join(number.split())
         if not name:
             raise ValueError("Prize name is required")
         prize = self._one(
@@ -187,7 +222,7 @@ class PrizeDrawStore:
         )
         if prize is None:
             return False
-        prize.update(prize_name=name, sponsor=sponsor)
+        prize.update(prize_name=name, sponsor=sponsor, number=number)
         self.db.t.prizes.update(prize)
         return True
 
@@ -231,7 +266,8 @@ class PrizeDrawStore:
                     else:
                         duplicates += 1
                 else:
-                    self.add_prize(event_id, name, optional_value)
+                    number = values.get("number") or values.get("prize_number", "")
+                    self.add_prize(event_id, name, optional_value, number)
                     added += 1
             return ImportReport(added, duplicates, tuple(errors))
         except csv.Error as error:
@@ -273,6 +309,29 @@ class PrizeDrawStore:
         if prize is None:
             return False
         self.db.t.prizes.delete(prize_id)
+        return True
+
+    def return_prize_to_pool(self, event_id: int, prize_id: int) -> bool:
+        with self.db.conn:
+            prize = self._one(
+                self.db.t.prizes,
+                "event_id = ? AND id = ? AND drawn = 1",
+                (event_id, prize_id),
+            )
+            if prize is None:
+                return False
+            draw = self._one(
+                self.db.t.draws,
+                "event_id = ? AND prize_id = ?",
+                (event_id, prize_id),
+            )
+            if draw is not None and draw["entrant_id"] is not None:
+                self.db.t.entrants.update({"id": draw["entrant_id"], "eligible": 1})
+            self.db.t.draws.delete_where(
+                "event_id = ? AND prize_id = ?",
+                (event_id, prize_id),
+            )
+            self.db.t.prizes.update({"id": prize_id, "drawn": 0})
         return True
 
     def clear_entrants(self, event_id: int) -> int:
