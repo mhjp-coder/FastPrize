@@ -130,7 +130,6 @@ def register_routes(rt, store):
             if not selected_event and not store.list_events()
             else "",
             event_id=selected_event["id"] if selected_event else None,
-            event_name=selected_event["name"] if selected_event else None,
         )
 
     @rt("/events", methods=["GET"])
@@ -200,7 +199,6 @@ def register_routes(rt, store):
                 cls="card padding secondary-container small-round vertical",
             ),
             event_id=selected_event["id"] if selected_event else None,
-            event_name=selected_event["name"] if selected_event else None,
             active_link="events",
         )
 
@@ -526,7 +524,6 @@ def register_routes(rt, store):
                 cls="grid small-space",
             ),
             event_id=event_id,
-            event_name=event["name"],
             active_link="overview",
         )
 

@@ -42,73 +42,36 @@ function updateEditControls() {
     }
 }
 
-function initializeHistoryTimezone() {
-    const select = document.getElementById("history-timezone");
-    if (!select) return;
-
-    const localTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
-    const supportedTimezones =
-        typeof Intl.supportedValuesOf === "function"
-            ? Intl.supportedValuesOf("timeZone")
-            : [
-                "America/Los_Angeles",
-                "America/Denver",
-                "America/Chicago",
-                "America/New_York",
-                "Europe/London",
-                "Europe/Paris",
-                "Asia/Kolkata",
-                "Asia/Tokyo",
-                "Australia/Sydney",
-            ];
-    const timezones = [...new Set(["UTC", localTimezone, ...supportedTimezones])];
-    timezones.sort((left, right) => {
-        if (left === "UTC") return -1;
-        if (right === "UTC") return 1;
-        return left.localeCompare(right);
+function updateHistoryTimes() {
+    const formatter = new Intl.DateTimeFormat("en-CA", {
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        hourCycle: "h23",
     });
-    select.replaceChildren(
-        ...timezones.map(timezone => {
-            const option = new Option(timezone.replaceAll("_", " "), timezone);
-            option.classList.add("small-text");
-            return option;
-        })
-    );
-
-    const savedTimezone = localStorage.getItem("history-timezone");
-    select.value = timezones.includes(savedTimezone) ? savedTimezone : localTimezone;
-
-    function updateHistoryTimes() {
-        const formatter = new Intl.DateTimeFormat("en-CA", {
-            timeZone: select.value,
-            year: "numeric",
-            month: "2-digit",
-            day: "2-digit",
-            hour: "2-digit",
-            minute: "2-digit",
-            hourCycle: "h23",
-        });
-        for (const time of document.querySelectorAll("time[data-history-time]")) {
-            const parts = Object.fromEntries(
-                formatter
-                    .formatToParts(new Date(time.dateTime))
-                    .map(({ type, value }) => [type, value])
-            );
-            time.textContent = `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}`;
-        }
+    for (const time of document.querySelectorAll("time[data-history-time]")) {
+        const parts = Object.fromEntries(
+            formatter
+                .formatToParts(new Date(time.dateTime))
+                .map(({ type, value }) => [type, value])
+        );
+        time.querySelector("[data-history-date]").textContent =
+            `${parts.year}-${parts.month}-${parts.day}`;
+        time.querySelector("[data-history-clock]").textContent =
+            `${parts.hour}:${parts.minute}`;
     }
-
-    select.addEventListener("change", () => {
-        localStorage.setItem("history-timezone", select.value);
-        updateHistoryTimes();
-    });
-    updateHistoryTimes();
 }
 
 openAutoOpenDialogs();
 initializeAddExpansions();
 updateEditControls();
-initializeHistoryTimezone();
+updateHistoryTimes();
+document.body.addEventListener("htmx:configRequest", event => {
+    const token = document.querySelector('meta[name="csrf-token"]')?.content;
+    if (token) event.detail.headers["X-CSRF-Token"] = token;
+});
 document.body.addEventListener("htmx:afterSwap", event => {
     if (event.target instanceof Element) {
         openAutoOpenDialogs(event.target);

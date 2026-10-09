@@ -1,16 +1,122 @@
 import re
+import sys
+import time
 from datetime import UTC, datetime, timedelta
+from http.cookies import SimpleCookie
+from pathlib import Path
 from typing import Any, cast
 
+import pytest
 from fasthtml.common import Client, to_xml
 
+from fastprize import auth_cli
 from fastprize.app import create_app
+from fastprize.auth import hash_password, verify_password
+from fastprize.store import DEFAULT_DATABASE_PATH, PrizeDrawStore, get_database_path
 from fastprize.ui import TECHNOLOGY_QUOTES, winner_fragment
+
+
+def test_default_database_path_is_project_root(tmp_path, monkeypatch):
+    monkeypatch.delenv("FASTPRIZE_DB_PATH", raising=False)
+    monkeypatch.chdir(tmp_path)
+
+    assert (
+        get_database_path() == Path(__file__).resolve().parents[1] / "fastprize.sqlite3"
+    )
+    assert get_database_path() == DEFAULT_DATABASE_PATH
+
+
+@pytest.mark.parametrize("entrypoint", ["app", "cli"])
+@pytest.mark.parametrize("environment_override", [False, True])
+def test_database_entrypoints_ignore_working_directory(
+    tmp_path, monkeypatch, entrypoint, environment_override
+):
+    root_database = tmp_path / "fastprize.sqlite3"
+    override_database = tmp_path / "override.sqlite3"
+    working_directory = tmp_path / "nested"
+    working_directory.mkdir()
+    monkeypatch.chdir(working_directory)
+    monkeypatch.setattr("fastprize.store.DEFAULT_DATABASE_PATH", root_database)
+    monkeypatch.delenv("FASTPRIZE_DB_PATH", raising=False)
+    expected_database = root_database
+    if environment_override:
+        monkeypatch.setenv("FASTPRIZE_DB_PATH", str(override_database))
+        expected_database = override_database
+
+    if entrypoint == "app":
+        _, store = create_app()
+        assert store.db_path == str(expected_database)
+    else:
+        monkeypatch.setattr(
+            sys, "argv", ["fastprize-admin", "create", "admin@example.test"]
+        )
+        monkeypatch.setattr(
+            auth_cli.getpass, "getpass", lambda prompt: "test-password-123"
+        )
+        auth_cli.main()
+        assert PrizeDrawStore(expected_database).get_admin_by_email(
+            "admin@example.test"
+        )
+
+    assert expected_database.exists()
+    assert not (working_directory / "fastprize.sqlite3").exists()
+
+
+@pytest.mark.parametrize(
+    ("enabled", "new_password"),
+    [(False, "new-password-123"), (True, "new-password-123"), (False, "short")],
+)
+def test_cli_password_reset_reenables_account(
+    tmp_path, monkeypatch, enabled, new_password
+):
+    database = tmp_path / "cli-reset.sqlite3"
+    store = PrizeDrawStore(database)
+    admin = store.create_admin("admin@example.test", hash_password("old-password-123"))
+    store.db.t.admins.update({"id": admin["id"], "enabled": int(enabled)})
+    monkeypatch.setenv("FASTPRIZE_DB_PATH", str(database))
+    monkeypatch.setattr(
+        sys, "argv", ["fastprize-admin", "reset-password", admin["email"]]
+    )
+    monkeypatch.setattr(auth_cli.getpass, "getpass", lambda prompt: new_password)
+
+    if len(new_password) < 12:
+        with pytest.raises(SystemExit):
+            auth_cli.main()
+        unchanged = store.get_admin(admin["id"])
+        assert unchanged is not None
+        assert not unchanged["enabled"]
+        assert unchanged["password_hash"] == admin["password_hash"]
+        assert unchanged["auth_version"] == admin["auth_version"]
+    else:
+        auth_cli.main()
+        updated = store.get_admin(admin["id"])
+        assert updated is not None
+        assert updated["enabled"]
+        assert verify_password(updated["password_hash"], new_password)
+        assert not verify_password(updated["password_hash"], "old-password-123")
+        assert updated["auth_version"] > admin["auth_version"]
 
 
 def _test_client(app):
     client = Client(app)
     cast(Any, client).cli.follow_redirects = True
+    cast(Any, client).cli.headers.update({"Origin": "http://testserver"})
+    store = app.state.store
+    if store.get_admin_by_email("test-admin@example.test") is None:
+        store.create_admin(
+            "test-admin@example.test", hash_password("test-password-123")
+        )
+    login_page = client.get("/login").text
+    csrf_token = re.search(r'name="csrf" value="([^"]+)"', login_page)
+    assert csrf_token is not None
+    client.post(
+        "/login",
+        data={
+            "email": "test-admin@example.test",
+            "password": "test-password-123",
+            "csrf": csrf_token.group(1),
+        },
+    )
     return client
 
 
@@ -39,6 +145,37 @@ def test_theme_controls_are_placed_in_responsive_navigation(tmp_path):
         in desktop_nav.group()
     )
     assert 'class="horizontal middle-align small-space"' in mobile_nav.group()
+
+
+@pytest.mark.parametrize("selected_event", [False, True])
+def test_desktop_and_mobile_navigation_follow_the_same_order(tmp_path, selected_event):
+    app, store = create_app(tmp_path / "menu-order.sqlite3")
+    client = _test_client(app)
+    if selected_event:
+        event_id = store.create_event("Awards")
+        client.get(f"/events/{event_id}")
+    page = client.get("/admin/accounts").text
+    desktop = re.search(r'<nav class="left drawer[^\"]*">.*?</nav>', page, re.DOTALL)
+    mobile = re.search(r"<footer\b[^>]*>.*?</footer>", page, re.DOTALL)
+    assert desktop is not None
+    assert mobile is not None
+    expected = ["Events", "Admin"]
+    if selected_event:
+        expected = [
+            "Draw",
+            "Live Display",
+            "Entrants",
+            "Prizes",
+            "Draw History",
+            "Manage",
+            "Events",
+            "Admin",
+        ]
+        for navigation in (desktop.group(), mobile.group()):
+            assert f'hx-get="/events/{event_id}/display-link"' in navigation
+            assert 'hx-target="#display-link-modal"' in navigation
+    assert re.findall(r"<div>([^<]+)</div>", desktop.group()) == expected
+    assert re.findall(r'<a\b[^>]*title="([^"]+)"', mobile.group()) == expected
 
 
 def test_event_links_have_individual_compact_containers(tmp_path):
@@ -131,7 +268,8 @@ def test_entrants_page_matches_management_card_layout(tmp_path):
     assert page.count('class="s6 m6 l6 field label border fill round extra"') == 2
     assert 'class="s12 responsive extra primary"' in page
     assert (
-        'class="s12 m6 l6 card padding tertiary-container small-round vertical"' in page
+        'class="s12 m12 l6 card padding tertiary-container small-round vertical"'
+        in page
     )
     assert 'aria-label="Remove Ada Lovelace"' in page
     assert 'aria-label="Edit Ada Lovelace"' in page
@@ -325,7 +463,10 @@ def test_workspace_contains_combined_csv_import_form(tmp_path):
     assert 'aria-controls="prizes-csv-info"' in workspace
     assert 'id="entrants-csv-info"' in workspace
     assert 'id="prizes-csv-info"' in workspace
-    assert workspace.count('data-close-on-backdrop="true"') == 2
+    for dialog_id in ("entrants-csv-info", "prizes-csv-info"):
+        dialog = re.search(rf'<dialog\b[^>]*id="{dialog_id}"[^>]*>', workspace)
+        assert dialog is not None
+        assert 'data-close-on-backdrop="true"' in dialog.group()
     assert "Required: name. Optional: organization." in workspace
     assert (
         "Required: prize_name. Optional: sponsor, number (or prize_number)."
@@ -497,8 +638,8 @@ def test_draw_page_uses_live_draw_prize_cards(tmp_path):
     assert 'id="draw-prize-search"' in page
     assert f'hx-get="/events/{event_id}/draw/search"' in page
     assert 'hx-target="#draw-prize-list"' in page
-    assert page.index("<div>Draw</div>") < page.index("<div>Live display</div>")
-    assert page.index("<div>Live display</div>") < page.index("<div>Draw history</div>")
+    assert page.index("<div>Draw</div>") < page.index("<div>Live Display</div>")
+    assert page.index("<div>Live Display</div>") < page.index("<div>Draw History</div>")
 
     link = client.get(f"/events/{event_id}/display-link").text
     assert '<h2 class="small">Live display</h2>' in link
@@ -516,7 +657,7 @@ def test_draw_page_uses_live_draw_prize_cards(tmp_path):
     assert "1 eligible entrants" not in page
     assert (
         page.count(
-            'class="s12 m6 l6 card padding tertiary-container small-round vertical"'
+            'class="s12 m12 l6 card padding tertiary-container small-round vertical"'
         )
         == 2
     )
@@ -702,16 +843,19 @@ def test_history_page_uses_striped_table_and_stacks_cell_details(tmp_path):
     assert '<h1 class="small">Draw history</h1>' in page
     assert "COMPLETED DRAWS" not in page
     assert 'class="stripes"' in page
-    assert 'id="history-timezone"' in page
-    assert 'class="field label suffix border round fill small small-width"' in page
-    assert 'class="small-text"' in page
-    assert '<label for="history-timezone">Time zone</label>' in page
-    assert "<i>arrow_drop_down</i>" in page
+    assert "<th>Time</th>" in page
+    assert "history-timezone" not in page
+    assert "Time zone" not in page
+    assert "<select" not in page
     assert "Times are stored in UTC." not in page
     draw = store.draw_history(event_id)[0]
     assert f'datetime="{draw["created_at"]}"' in page
     assert 'data-history-time="true"' in page
-    assert f"{draw['created_at'].replace('T', ' ')[:19]} UTC" in page
+    assert 'data-history-date="true"' in page
+    assert 'data-history-clock="true"' in page
+    assert '<br class="s">' in page or '<br class="s" />' in page
+    assert draw["created_at"][:10] in page
+    assert f"{draw['created_at'][11:16]} UTC" in page
     assert re.search(
         r'<td>\s*<div class="vertical">\s*<strong>Ada Lovelace</strong>'
         r"<small>Engine Co</small>\s*</div>\s*</td>",
@@ -733,8 +877,10 @@ def test_projector_live_result_uses_htmx_fragment(tmp_path):
 
     empty_display = client.get(f"/events/{event_id}/display").text
     assert '<body class="screen">' in empty_display
-    assert "/assets/fastprize-live-display-velvet-light-4k.png" in empty_display
-    assert "/assets/fastprize-live-display-velvet-dark-4k.png" in empty_display
+    assert "fastprize-live-display-velvet-" not in empty_display
+    assert "background-image: linear-gradient(135deg" in empty_display
+    assert "color-mix(in srgb, var(--surface) 86%, var(--primary) 14%)" in empty_display
+    assert "var(--surface) 55%" in empty_display
     assert "@media (max-height: 600px)" in empty_display
     assert "@media (max-height: 480px)" in empty_display
     assert ".live-display-quote" in empty_display
@@ -743,6 +889,10 @@ def test_projector_live_result_uses_htmx_fragment(tmp_path):
     assert 'data-add-expansion="true"' in empty_display
     assert 'data-theme-picker-open="true"' in empty_display
     assert 'id="theme-color-picker"' in empty_display
+    assert re.search(r'src="/assets/theme\.js\?v=\d+"', empty_display)
+    assert 'href="/assets/theme-palette.css?v=3"' in empty_display
+    assert empty_display.count('data-theme-palette="') == 4
+    assert 'data-theme-palette="sapphire"' in empty_display
     assert "right: calc(100% + .5rem)" in empty_display
     assert 'class="center-align live-display-lead"' in empty_display
     assert "font-size: 5rem" in empty_display
@@ -774,6 +924,429 @@ def test_projector_live_result_uses_htmx_fragment(tmp_path):
     assert ">Engine Co</h6>" in fragment
     assert "<strong>Laptop</strong>" in fragment
     assert "<strong>Northwind</strong>" in fragment
+
+
+def test_anonymous_projector_is_public_but_management_and_display_link_are_protected(
+    tmp_path,
+):
+    from fasthtml.common import Client
+
+    app, store = create_app(tmp_path / "auth-boundary.sqlite3")
+    event_id = store.create_event("Awards")
+    client = Client(app)
+
+    assert client.get("/").status_code == 303
+    setup_page = client.get("/login").text
+    assert "Admin setup required" in setup_page
+    assert "uv run fastprize-admin create you@example.com" in setup_page
+    assert client.get(f"/events/{event_id}").status_code == 303
+    assert client.get(f"/events/{event_id}/display-link").status_code == 303
+    assert client.get(f"/events/{event_id}/display").status_code == 200
+    assert client.get(f"/events/{event_id}/display/latest-fragment").status_code == 200
+    assert client.get(f"/events/{event_id}/display/latest").status_code == 200
+    assert client.get("/assets/theme.js").status_code == 200
+
+
+@pytest.mark.parametrize("has_admin", [False, True])
+def test_login_page_uses_focused_layout_without_management_links(tmp_path, has_admin):
+    app, store = create_app(tmp_path / "login-layout.sqlite3")
+    if has_admin:
+        store.create_admin("operator@example.test", hash_password("test-password-123"))
+
+    page = Client(app).get("/login").text
+
+    assert 'href="/events"' not in page
+    assert 'href="/admin/accounts"' not in page
+    assert 'class="left drawer' not in page
+    assert "<footer" not in page
+    assert 'alt="FastPrize logo"' in page
+    assert 'data-theme-mode="toggle"' not in page
+    assert 'data-theme-picker-open="true"' not in page
+    assert 'id="theme-color-picker"' not in page
+    body_tag = re.search(r"<body\b[^>]*>", page)
+    assert body_tag is not None
+    assert 'class="dark"' in body_tag.group()
+    assert 'data-theme-fixed="dark"' in body_tag.group()
+    assert 'class="s12 m8 l4"' in page
+    assert 'class="grid"' in page
+    assert 'class="grid large-space"' not in page
+    assert page.count("<main") == 1
+    if has_admin:
+        assert 'action="/login"' in page
+        assert 'autocomplete="username"' in page
+        assert 'autocomplete="current-password"' in page
+        assert 'name="csrf"' in page
+        assert page.index('id="email"') < page.index('for="email"')
+        assert page.index('id="password"') < page.index('for="password"')
+
+
+def test_accounts_page_preserves_selected_event_navigation_and_styles_forms(tmp_path):
+    app, store = create_app(tmp_path / "accounts-layout.sqlite3")
+    event_id = store.create_event("Awards")
+    client = _test_client(app)
+    client.get(f"/events/{event_id}")
+    workspace = client.get(f"/events/{event_id}/history").text
+    accounts = client.get("/admin/accounts").text
+
+    for page in (workspace, accounts):
+        for section in ("entrants", "prizes", "draw", "history"):
+            assert f'href="/events/{event_id}/{section}"' in page
+        assert f'hx-get="/events/{event_id}/display-link"' in page
+        assert 'href="/admin/accounts"' in page
+        assert 'id="display-link-modal"' in page
+    assert 'aria-current="page"' in accounts
+    assert 'id="admin-counts"' in accounts
+    assert "1 total | 1 enabled" in accounts
+    assert 'id="admin-add-expansion"' in accounts
+    assert 'data-add-expansion="true"' in accounts
+    assert (
+        'class="card padding secondary-container small-round vertical bottom-padding"'
+        in accounts
+    )
+    assert (
+        'class="s12 m6 l6 card padding tertiary-container small-round vertical"'
+        in accounts
+    )
+    assert (
+        'class="grid small-space" id="admin-list"' in accounts
+        or 'id="admin-list" class="grid small-space"' in accounts
+    )
+    assert accounts.count('class="s6 m6 l6 field label border fill round extra"') == 2
+    assert accounts.index('id="new-email"') < accounts.index('for="new-email"')
+    created = client.post(
+        "/admin/accounts",
+        data={"email": "second@example.test", "password": "second-admin-password"},
+    ).text
+    assert "Admin account created." in created
+    assert f'href="/events/{event_id}/draw"' in created
+    assert store.get_admin_by_email("second@example.test") is not None
+
+
+def test_admin_disable_requires_confirmation_dialog_and_keeps_final_admin_guard(
+    tmp_path,
+):
+    app, store = create_app(tmp_path / "admin-disable-dialog.sqlite3")
+    client = _test_client(app)
+    current = store.get_admin_by_email("test-admin@example.test")
+    assert current is not None
+    target = store.create_admin(
+        "target@example.test", hash_password("target-password-123")
+    )
+    disabled = store.create_admin(
+        "disabled@example.test", hash_password("disabled-password-123")
+    )
+    store.set_admin_enabled(disabled["id"], False)
+    page = client.get("/admin/accounts").text
+    dialog_id = f"disable-admin-dialog-{target['id']}"
+    dialog = re.search(
+        rf'<dialog\b[^>]*id="{dialog_id}"[^>]*>.*?</dialog>', page, re.DOTALL
+    )
+    assert dialog is not None
+    assert f'aria-controls="{dialog_id}"' in page
+    assert f'data-ui="#{dialog_id}"' in page
+    assert "Disable admin?" in dialog.group()
+    assert "target@example.test" in dialog.group()
+    assert "existing sessions will end" in dialog.group()
+    assert ">Cancel</button>" in dialog.group()
+    assert 'name="csrf"' in dialog.group()
+    assert 'name="enabled" value="0"' in dialog.group()
+    assert f'action="/admin/accounts/{target["id"]}/enabled"' in dialog.group()
+    assert f'action="/admin/accounts/{target["id"]}/delete"' in dialog.group()
+    assert ">Delete</span>" in dialog.group()
+    assert "This cannot be undone." in dialog.group()
+    assert f'id="disable-admin-dialog-{disabled["id"]}"' not in page
+    assert store.get_admin(target["id"])["enabled"] == 1
+
+    response = client.post(
+        f"/admin/accounts/{target['id']}/enabled", data={"enabled": "0"}
+    )
+    assert "Admin account updated." in response.text
+    assert store.get_admin(target["id"])["enabled"] == 0
+    rejected = client.post(
+        f"/admin/accounts/{current['id']}/enabled", data={"enabled": "0"}
+    )
+    assert "The final enabled admin cannot be disabled." in rejected.text
+    assert store.get_admin(current["id"])["enabled"] == 1
+
+
+def test_admin_delete_revokes_sessions_and_rejects_unsafe_requests(tmp_path):
+    app, store = create_app(tmp_path / "admin-delete.sqlite3")
+    client = _test_client(app)
+    target = store.create_admin(
+        "target@example.test", hash_password("target-password-123")
+    )
+    target_client = Client(app)
+    target_client.cli.headers.update({"Origin": "http://testserver"})
+    page = target_client.get("/login").text
+    csrf = re.search(r'name="csrf" value="([^"]+)"', page)
+    assert csrf is not None
+    target_client.post(
+        "/login",
+        data={
+            "email": target["email"],
+            "password": "target-password-123",
+            "csrf": csrf.group(1),
+        },
+    )
+    assert target_client.get("/admin/accounts").status_code == 200
+    delete_url = f"/admin/accounts/{target['id']}/delete"
+    assert (
+        Client(app)
+        .post(delete_url, headers={"Origin": "http://testserver"})
+        .status_code
+        == 303
+    )
+    assert (
+        client.post(
+            delete_url, headers={"Origin": "https://untrusted.example"}
+        ).status_code
+        == 403
+    )
+    assert store.get_admin(target["id"]) is not None
+    assert client.get(delete_url).status_code == 405
+    deleted = client.post(delete_url)
+    assert "Admin account deleted." in deleted.text
+    assert store.get_admin(target["id"]) is None
+    replacement = store.create_admin(
+        "replacement@example.test", hash_password("replacement-password-123")
+    )
+    assert replacement["id"] == target["id"]
+    assert target_client.get("/admin/accounts").status_code == 303
+    store.set_admin_enabled(replacement["id"], False)
+    current = store.get_admin_by_email("test-admin@example.test")
+    assert current is not None
+    rejected = client.post(f"/admin/accounts/{current['id']}/delete")
+    assert "The final enabled admin cannot be deleted." in rejected.text
+    assert store.get_admin(current["id"]) is not None
+    store.set_admin_enabled(replacement["id"], True)
+    self_deleted = client.post(f"/admin/accounts/{current['id']}/delete")
+    assert "Admin sign in" in self_deleted.text
+    assert store.get_admin(current["id"]) is None
+    assert store.get_admin(replacement["id"])["enabled"] == 1
+
+
+def test_admin_login_logout_and_account_disable_revoke_session(tmp_path):
+    from fasthtml.common import Client
+
+    app, store = create_app(tmp_path / "auth-session.sqlite3")
+    first = store.create_admin(
+        "first@example.test", hash_password("first-admin-password")
+    )
+    second_hash = hash_password("second-admin-password")
+    second = store.create_admin("second@example.test", second_hash)
+    client = Client(app)
+    client.cli.headers.update({"Origin": "http://testserver"})
+
+    login_page = client.get("/login").text
+    csrf = re.search(r'name="csrf" value="([^"]+)"', login_page)
+    assert csrf is not None
+    rejected = client.post(
+        "/login",
+        data={
+            "email": "first@example.test",
+            "password": "wrong-password",
+            "csrf": csrf.group(1),
+        },
+    )
+    assert "Sign-in failed. Check your email and password." in rejected.text
+
+    login_page = client.get("/login").text
+    csrf = re.search(r'name="csrf" value="([^"]+)"', login_page)
+    assert csrf is not None
+    logged_in = client.post(
+        "/login",
+        data={
+            "email": "first@example.test",
+            "password": "first-admin-password",
+            "csrf": csrf.group(1),
+        },
+    )
+    assert logged_in.status_code == 303
+    assert client.get("/").status_code == 200
+    assert client.get("/admin/accounts").status_code == 200
+
+    store.update_admin_password(
+        first["id"], hash_password("reset-first-admin-password")
+    )
+    assert client.get("/").status_code == 303
+
+    second_client = Client(app)
+    second_client.cli.headers.update({"Origin": "http://testserver"})
+    login_page = second_client.get("/login").text
+    csrf = re.search(r'name="csrf" value="([^"]+)"', login_page)
+    assert csrf is not None
+    second_client.post(
+        "/login",
+        data={
+            "email": "second@example.test",
+            "password": "second-admin-password",
+            "csrf": csrf.group(1),
+        },
+    )
+    assert second_client.get("/admin/accounts").status_code == 200
+    logout_csrf = re.search(
+        r'action="/logout".*?name="csrf" value="([^"]+)"',
+        second_client.get("/admin/accounts").text,
+        re.DOTALL,
+    )
+    assert logout_csrf is not None
+    logout = second_client.post(
+        "/logout",
+        data={"csrf": logout_csrf.group(1)},
+    )
+    assert logout.status_code == 303
+    assert second_client.get("/").status_code == 303
+
+    second_login = second_client.get("/login").text
+    csrf = re.search(r'name="csrf" value="([^"]+)"', second_login)
+    assert csrf is not None
+    second_client.post(
+        "/login",
+        data={
+            "email": "second@example.test",
+            "password": "second-admin-password",
+            "csrf": csrf.group(1),
+        },
+    )
+    assert store.set_admin_enabled(second["id"], False)
+    assert second_client.get("/").status_code == 303
+
+
+def test_signed_in_session_cookie_lasts_seven_days(tmp_path):
+    app, store = create_app(tmp_path / "session-lifetime.sqlite3")
+    store.create_admin("operator@example.test", hash_password("test-password-123"))
+    client = Client(app)
+    client.cli.headers.update({"Origin": "http://testserver"})
+    page = client.get("/login").text
+    csrf = re.search(r'name="csrf" value="([^"]+)"', page)
+    assert csrf is not None
+    response = client.post(
+        "/login",
+        data={
+            "email": "operator@example.test",
+            "password": "test-password-123",
+            "csrf": csrf.group(1),
+        },
+    )
+    cookies = SimpleCookie()
+    cookies.load(response.headers["set-cookie"])
+    session_cookie = cookies["fastprize_session"]
+
+    assert response.status_code == 303
+    assert session_cookie["max-age"] == str(60 * 60 * 24 * 7)
+    assert session_cookie["httponly"]
+    assert session_cookie["samesite"].casefold() == "lax"
+
+
+def test_secure_cookie_mode_requires_explicit_signing_secret(tmp_path, monkeypatch):
+    monkeypatch.setenv("FASTPRIZE_COOKIE_SECURE", "true")
+    monkeypatch.delenv("FASTPRIZE_SESSION_SECRET", raising=False)
+
+    with pytest.raises(RuntimeError, match="FASTPRIZE_SESSION_SECRET"):
+        create_app(tmp_path / "secure-cookie.sqlite3")
+
+
+def test_admin_account_management_forms_create_reset_and_disable(tmp_path):
+    app, store = create_app(tmp_path / "admin-management.sqlite3")
+    client = _test_client(app)
+    page = client.get("/admin/accounts").text
+    csrf = re.search(r'name="csrf" value="([^"]+)"', page)
+    assert csrf is not None
+
+    created = client.post(
+        "/admin/accounts",
+        data={
+            "email": "second@example.test",
+            "password": "second-admin-password",
+            "csrf": csrf.group(1),
+        },
+    )
+    second = store.get_admin_by_email("second@example.test")
+    assert second is not None, created.text
+    assert "Admin account created." in created.text
+
+    reset = client.post(
+        f"/admin/accounts/{second['id']}/password",
+        data={"password": "updated-admin-password", "csrf": csrf.group(1)},
+    )
+    updated = store.get_admin(second["id"])
+    assert "Password reset." in reset.text
+    assert verify_password(updated["password_hash"], "updated-admin-password")
+
+    disabled = client.post(
+        f"/admin/accounts/{second['id']}/enabled",
+        data={"enabled": "0", "csrf": csrf.group(1)},
+    )
+    assert "Admin account updated." in disabled.text
+    assert store.get_admin(second["id"])["enabled"] == 0
+
+    only_admin = store.get_admin_by_email("test-admin@example.test")
+    rejected = client.post(
+        f"/admin/accounts/{only_admin['id']}/enabled",
+        data={"enabled": "0", "csrf": csrf.group(1)},
+    )
+    assert "The final enabled admin cannot be disabled." in rejected.text
+
+
+def test_environment_bootstrap_creates_only_first_admin(tmp_path, monkeypatch):
+    database = tmp_path / "bootstrap-admin.sqlite3"
+    monkeypatch.setenv("FASTPRIZE_ADMIN_EMAIL", "First@Example.test")
+    monkeypatch.setenv("FASTPRIZE_ADMIN_PASSWORD", "bootstrap-password-123")
+
+    _, store = create_app(database)
+    first_admin = store.get_admin_by_email("first@example.test")
+    assert first_admin is not None
+    assert first_admin["password_hash"] != "bootstrap-password-123"
+
+    monkeypatch.setenv("FASTPRIZE_ADMIN_EMAIL", "Changed@Example.test")
+    monkeypatch.setenv("FASTPRIZE_ADMIN_PASSWORD", "changed-password-123")
+    _, restarted_store = create_app(database)
+    assert restarted_store.admin_count() == 1
+    assert restarted_store.get_admin_by_email("first@example.test") is not None
+    assert restarted_store.get_admin_by_email("changed@example.test") is None
+
+
+def test_login_rejects_cross_origin_posts_and_throttles_bad_passwords(tmp_path):
+    from fasthtml.common import Client
+
+    app, store = create_app(tmp_path / "login-security.sqlite3")
+    store.create_admin("operator@example.test", hash_password("valid-password-123"))
+    client = Client(app)
+    login_page = client.get("/login").text
+    csrf = re.search(r'name="csrf" value="([^"]+)"', login_page)
+    assert csrf is not None
+
+    cross_origin = client.post(
+        "/login",
+        headers={"Origin": "https://attacker.example"},
+        data={
+            "email": "operator@example.test",
+            "password": "wrong-password",
+            "csrf": csrf.group(1),
+        },
+    )
+    assert cross_origin.status_code == 403
+
+    client.cli.headers.update({"Origin": "http://testserver"})
+    for _ in range(5):
+        client.post(
+            "/login",
+            data={
+                "email": "operator@example.test",
+                "password": "wrong-password",
+                "csrf": csrf.group(1),
+            },
+        )
+    blocked = client.post(
+        "/login",
+        data={
+            "email": "operator@example.test",
+            "password": "valid-password-123",
+            "csrf": csrf.group(1),
+        },
+    )
+    assert "Sign-in failed. Check your email and password." in blocked.text
+    assert store.admin_login_is_limited("operator@example.test", time.time())
 
 
 def test_live_display_replaces_expired_winner_with_stable_quote():
@@ -821,8 +1394,8 @@ def test_event_workflow_and_live_display(tmp_path):
     assert "Draw Center" in home.text
     assert 'href="/assets/fastprize-favicon.svg"' in home.text
     assert "/assets/fastprize-logo.svg" in home.text
-    assert 'src="/assets/theme.js?v=5"' in home.text
-    assert 'src="/assets/interactions.js?v=10"' in home.text
+    assert re.search(r'src="/assets/theme\.js\?v=\d+"', home.text)
+    assert re.search(r'src="/assets/interactions\.js\?v=\d+"', home.text)
     assert client.get("/assets/fastprize-logo.svg").status_code == 200
     assert client.get("/assets/fastprize-favicon.svg").status_code == 200
     assert (
@@ -859,10 +1432,27 @@ def test_event_workflow_and_live_display(tmp_path):
     assert 'aria-haspopup="dialog"' in home.text
     assert 'id="theme-color-picker"' in home.text
     assert 'aria-label="Choose theme color"' in home.text
-    assert '<form method="dialog"' in home.text
-    for color in ("#607d8b", "#394cb1", "#e63c31", "#44a249", "#ead835"):
-        assert f'data-theme-color="{color}"' in home.text
-        assert f'style="background-color: {color}"' in home.text
+    assert 'method="dialog"' in home.text
+    palettes = (
+        ("sapphire", "#82B1FF", "#3159A6"),
+        ("jade", "#6DD6B0", "#087F5B"),
+        ("coral", "#F28B82", "#B3261E"),
+        ("marigold", "#FFD166", "#8C5A00"),
+    )
+    assert home.text.count('data-theme-palette="') == 4
+    for name, dark_color, light_color in palettes:
+        assert f'data-theme-palette="{name}"' in home.text
+        assert f'data-theme-color-dark="{dark_color}"' in home.text
+        assert f'data-theme-color-light="{light_color}"' in home.text
+    assert 'href="/assets/theme-palette.css?v=3"' in home.text
+    palette_styles = client.get("/assets/theme-palette.css").text
+    assert palette_styles.count("button.circle[data-theme-palette=") == 4
+    for name, dark_color, light_color in palettes:
+        assert f'button.circle[data-theme-palette="{name}"]' in palette_styles
+        assert (
+            f"linear-gradient(135deg, {light_color} 50%, {dark_color} 50%)"
+            in palette_styles
+        )
     assert '<body class="light"' in home.text
     assert "<style" not in home.text.lower()
     assert "class-=" not in home.text
@@ -900,7 +1490,7 @@ def test_event_workflow_and_live_display(tmp_path):
     assert "Launch day" in workspace.text
     assert "EVENT MANAGEMENT" not in workspace.text
     assert "Event tasks" not in workspace.text
-    assert "<div>Live display</div>" in workspace.text
+    assert "<div>Live Display</div>" in workspace.text
     assert "Public display" not in workspace.text
     assert "Open projector display" not in workspace.text
     assert 'class="active tiny-margin bottom-margin"' in workspace.text
@@ -1075,7 +1665,7 @@ def test_event_workflow_and_live_display(tmp_path):
 
     initial_display = client.get(f"/events/{event_id}/display")
     assert initial_display.status_code == 200
-    assert '<body class="dark"' in initial_display.text
+    assert '<body class="screen"' in initial_display.text
     assert "The next name could be yours." in initial_display.text
 
     preview_page = client.post(f"/events/{event_id}/draws/{prize_id}/preview")
@@ -1196,7 +1786,8 @@ def test_prize_mutations_return_htmx_fragments(tmp_path):
     assert "style=" not in page
     assert 'id="prize-counts"' in page
     assert (
-        'class="s12 m6 l6 card padding tertiary-container small-round vertical"' in page
+        'class="s12 m12 l6 card padding tertiary-container small-round vertical"'
+        in page
     )
     assert f'id="prize-row-{prize_id}"' in page
     assert f'data-edit-target="prize-info-{prize_id}"' in page

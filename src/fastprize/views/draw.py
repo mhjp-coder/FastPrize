@@ -88,7 +88,7 @@ def register_routes(rt, store):
                         ),
                         cls="grid middle-align small-space top-margin bottom-margin",
                     ),
-                    cls="s12 m6 l6 card padding tertiary-container small-round vertical",
+                    cls="s12 m12 l6 card padding tertiary-container small-round vertical",
                 )
                 for prize in prizes
             ]
@@ -214,7 +214,6 @@ def register_routes(rt, store):
             if eligible_count == 0 and available_prizes
             else "",
             event_id=event_id,
-            event_name=event["name"],
             active_link="draw",
         )
 
@@ -299,12 +298,12 @@ def register_routes(rt, store):
                 "left: 0; right: 0; z-index: 1; } "
                 "footer.live-display-footer { position: fixed; left: 0; "
                 "right: 0; bottom: 0; } "
-                "body.screen { background-position: center; "
-                "background-size: cover; background-attachment: fixed; } "
-                "body.screen[data-live-theme='light'] { background-image: "
-                "url('/assets/fastprize-live-display-velvet-light-4k.png?v=2'); } "
-                "body.screen[data-live-theme='dark'] { background-image: "
-                "url('/assets/fastprize-live-display-velvet-dark-4k.png?v=2'); }"
+                "body.screen { background-color: var(--surface); "
+                "background-image: linear-gradient(135deg, "
+                "color-mix(in srgb, var(--surface) 86%, var(--primary) 14%) 0%, "
+                "var(--surface) 55%, "
+                "color-mix(in srgb, var(--surface) 92%, var(--primary) 8%) 100%); "
+                "background-attachment: fixed; } "
                 ".live-display-theme-switcher { position: fixed; right: 1rem; "
                 "bottom: 1rem; z-index: 2; } "
                 ".live-display-theme-switcher > nav { position: absolute; "

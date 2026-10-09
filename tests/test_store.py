@@ -28,6 +28,49 @@ def test_csv_import_deduplicates_entrants_and_keeps_prize_copies(store):
     assert [prize["number"] for prize in store.prizes(event_id)] == ["007", "008"]
 
 
+def test_admin_accounts_normalize_email_and_password_reset_revokes_session(store):
+    admin = store.create_admin("  Operator@Example.COM ", "hash-v1")
+    assert admin["email_normalized"] == "operator@example.com"
+    assert store.get_admin_by_email("OPERATOR@example.com")["id"] == admin["id"]
+    with pytest.raises(ValueError, match="already exists"):
+        store.create_admin("operator@example.com", "hash-duplicate")
+
+    assert store.update_admin_password(admin["id"], "hash-v2")
+    updated = store.get_admin(admin["id"])
+    assert updated["password_hash"] == "hash-v2"
+    assert updated["auth_version"] == admin["auth_version"] + 1
+
+
+def test_admin_disable_guards_last_account_and_persists_login_throttle(store):
+    first = store.create_admin("first@example.test", "hash-first")
+    second = store.create_admin("second@example.test", "hash-second")
+    assert store.set_admin_enabled(first["id"], False)
+    assert not store.set_admin_enabled(second["id"], False)
+    assert store.get_admin(second["id"])["enabled"] == 1
+
+    assert not store.admin_login_is_limited("operator@example.test", 1000)
+    for failure in range(5):
+        store.record_admin_login_failure("operator@example.test", 1000 + failure)
+    assert store.admin_login_is_limited("operator@example.test", 1005)
+    store.clear_admin_login_failures("operator@example.test")
+    assert not store.admin_login_is_limited("operator@example.test", 1005)
+
+
+def test_admin_delete_guards_final_enabled_account_and_reused_ids(store):
+    first = store.create_admin("first@example.test", "hash-first")
+    second = store.create_admin("second@example.test", "hash-second")
+    assert store.delete_admin(second["id"])
+    assert store.get_admin(second["id"]) is None
+    replacement = store.create_admin("replacement@example.test", "hash-replacement")
+    assert replacement["id"] == second["id"]
+    assert replacement["auth_version"] != second["auth_version"]
+    assert store.set_admin_enabled(replacement["id"], False)
+    assert not store.delete_admin(first["id"])
+    assert store.delete_admin(replacement["id"])
+    assert not store.delete_admin(replacement["id"])
+    assert store.get_admin(first["id"])["enabled"] == 1
+
+
 def test_prize_csv_import_accepts_prize_number_header(store):
     event_id = store.create_event("Awards")
 

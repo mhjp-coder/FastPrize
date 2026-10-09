@@ -32,7 +32,6 @@ from fasthtml.common import (
     Span,
     Strong,
     Title,
-    Ul,
     fhjsscr,
     htmxsrc,
 )
@@ -113,12 +112,11 @@ def status_message(status: str) -> str:
 
 
 def theme_color_picker_dialog():
-    colors = [
-        ("Blue grey", "#607d8b"),
-        ("Indigo", "#394cb1"),
-        ("Red", "#e63c31"),
-        ("Green", "#44a249"),
-        ("Yellow", "#ead835"),
+    palettes = [
+        ("Sapphire", "sapphire", "#82B1FF", "#3159A6"),
+        ("Jade", "jade", "#6DD6B0", "#087F5B"),
+        ("Coral", "coral", "#F28B82", "#B3261E"),
+        ("Marigold", "marigold", "#FFD166", "#8C5A00"),
     ]
     return Dialog(
         H2("Choose theme color", cls="small"),
@@ -127,13 +125,14 @@ def theme_color_picker_dialog():
                 Button(
                     Span(),
                     type="button",
-                    title=f"{name} theme",
-                    aria_label=f"Use {name.lower()} theme",
-                    data_theme_color=color,
-                    style=f"background-color: {color}",
+                    title=f"{name} palette",
+                    aria_label=f"Use {name} palette in light or dark mode",
+                    data_theme_palette=palette,
+                    data_theme_color_dark=dark_color,
+                    data_theme_color_light=light_color,
                     cls="circle",
                 )
-                for name, color in colors
+                for name, palette, dark_color, light_color in palettes
             ),
             cls="horizontal wrap center-align small-space large-margin",
         ),
@@ -156,8 +155,8 @@ def document(
     *content,
     screen: bool = False,
     event_id: int | None = None,
-    event_name: str | None = None,
     active_link: str = "",
+    login_page: bool = False,
 ):
     if screen:
         body_content = (
@@ -169,22 +168,35 @@ def document(
         )
         body_class = "screen"
     else:
-        page_links = [("Events", "events", "/events", "calendar_month")]
+        page_links = []
         if event_id is not None:
             page_links.extend(
                 [
-                    ("Manage", "overview", f"/events/{event_id}", "event"),
+                    ("Draw", "draw", f"/events/{event_id}/draw", "casino"),
+                    ("Live Display", "display", "#", "qr_code_2"),
                     ("Entrants", "entrants", f"/events/{event_id}/entrants", "groups"),
                     ("Prizes", "prizes", f"/events/{event_id}/prizes", "redeem"),
-                    ("Draw", "draw", f"/events/{event_id}/draw", "casino"),
                     (
-                        "Draw history",
+                        "Draw History",
                         "history",
                         f"/events/{event_id}/history",
                         "history",
                     ),
+                    ("Manage", "overview", f"/events/{event_id}", "event"),
                 ]
             )
+        page_links.extend(
+            [
+                ("Events", "events", "/events", "calendar_month"),
+                ("Admin", "accounts", "/admin/accounts", "manage_accounts"),
+            ]
+        )
+        display_link_attributes = {
+            "hx_get": f"/events/{event_id}/display-link",
+            "hx_target": "#display-link-modal",
+            "hx_swap": "innerHTML",
+            "aria_haspopup": "dialog",
+        }
         navigation = []
         for label, key, href, icon in page_links:
             navigation.append(
@@ -201,21 +213,9 @@ def document(
                         else "tiny-margin bottom-margin"
                     ),
                     aria_current="page" if active_link == key else None,
+                    **(display_link_attributes if key == "display" else {}),
                 )
             )
-            if key == "draw":
-                navigation.append(
-                    A(
-                        I("qr_code_2"),
-                        Div("Live display"),
-                        href="#",
-                        hx_get=f"/events/{event_id}/display-link",
-                        hx_target="#display-link-modal",
-                        hx_swap="innerHTML",
-                        aria_haspopup="dialog",
-                        cls="tiny-margin bottom-margin",
-                    )
-                )
         mobile_navigation = [
             A(
                 I(
@@ -231,6 +231,7 @@ def document(
                 title=label,
                 aria_label=label,
                 aria_current="page" if active_link == key else None,
+                **(display_link_attributes if key == "display" else {}),
             )
             for label, key, href, icon in page_links
         ]
@@ -306,6 +307,30 @@ def document(
             ),
         )
         body_class = "light"
+        if login_page:
+            body_class = "dark"
+            body_content = (
+                Nav(
+                    A(
+                        brand_mark(),
+                        H6("FastPrize", cls="secondary-text left-margin"),
+                        href="/",
+                        aria_label="FastPrize home",
+                        cls="horizontal middle-align small-space",
+                    ),
+                    cls="top padding horizontal middle-align center-align",
+                    aria_label="FastPrize",
+                ),
+                Main(
+                    Div(cls="large-space"),
+                    Div(
+                        Div(cls="m l m2 l4"),
+                        Div(*content, cls="s12 m8 l4"),
+                        cls="grid",
+                    ),
+                    cls="responsive large-padding",
+                ),
+            )
     return Html(
         Head(
             Meta(charset="utf-8"),
@@ -322,6 +347,7 @@ def document(
                 rel="stylesheet",
                 href="https://cdn.jsdelivr.net/npm/beercss@5.0.3/dist/cdn/beer.min.css",
             ),
+            Link(rel="stylesheet", href="/assets/theme-palette.css?v=3"),
             Script(
                 src="https://cdn.jsdelivr.net/npm/material-dynamic-colors@1.1.4/dist/cdn/material-dynamic-colors.min.js",
                 type="module",
@@ -330,17 +356,15 @@ def document(
                 src="https://cdn.jsdelivr.net/npm/beercss@5.0.3/dist/cdn/beer.min.js",
                 type="module",
             ),
-            Script(src="/assets/theme.js?v=5", type="module"),
-            Script(src="/assets/interactions.js?v=10", type="module"),
+            Script(src="/assets/theme.js?v=10", type="module"),
+            Script(src="/assets/interactions.js?v=12", type="module"),
         ),
-        Body(*body_content, cls=body_class),
+        Body(
+            *body_content,
+            cls=body_class,
+            data_theme_fixed="dark" if login_page else None,
+        ),
     )
-
-
-def record_list(records: list[dict], empty_message: str, render_record):
-    if not records:
-        return P(empty_message, cls="surface-variant padding")
-    return Ul(*(render_record(record) for record in records), cls="border no-space")
 
 
 def winner_fragment(draw: dict | None, poll_url: str | None = None):

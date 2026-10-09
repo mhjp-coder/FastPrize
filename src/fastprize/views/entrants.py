@@ -162,7 +162,7 @@ def register_routes(rt, store):
                 cls="horizontal middle-align small-space top-margin right-align bottom-margin",
             ),
             entrant_count_update(event_id) if include_count else "",
-            cls="s12 m6 l6 card padding tertiary-container small-round vertical",
+            cls="s12 m12 l6 card padding tertiary-container small-round vertical",
             id=f"entrant-row-{entrant_id}",
         )
 
@@ -278,7 +278,6 @@ def register_routes(rt, store):
                 cls="card padding secondary-container small-round vertical bottom-padding",
             ),
             event_id=event_id,
-            event_name=event["name"],
             active_link="entrants",
         )
 

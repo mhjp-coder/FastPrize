@@ -2,14 +2,13 @@ from fasthtml.common import (
     H1,
     A,
     Article,
+    Br,
     Div,
     HTTPException,
     I,
-    Label,
-    Option,
     P,
-    Select,
     Small,
+    Span,
     Strong,
     Table,
     Tbody,
@@ -48,7 +47,13 @@ def register_routes(rt, store):
                 ),
                 Td(
                     Time(
-                        f"{draw['created_at'].replace('T', ' ')[:19]} UTC",
+                        Span(draw["created_at"][:10], data_history_date="true"),
+                        Br(cls="s"),
+                        Span(" ", cls="m l"),
+                        Span(
+                            f"{draw['created_at'][11:16]} UTC",
+                            data_history_clock="true",
+                        ),
                         datetime=draw["created_at"],
                         data_history_time="true",
                     )
@@ -64,19 +69,7 @@ def register_routes(rt, store):
                             Tr(
                                 Th("Winner"),
                                 Th("Prize"),
-                                Th(
-                                    Div(
-                                        Select(
-                                            Option(
-                                                "UTC", value="UTC", cls="small-text"
-                                            ),
-                                            id="history-timezone",
-                                        ),
-                                        Label("Time zone", fr="history-timezone"),
-                                        I("arrow_drop_down"),
-                                        cls="field label suffix border round fill small small-width",
-                                    )
-                                ),
+                                Th("Time"),
                             )
                         ),
                         Tbody(*rows),
@@ -107,6 +100,5 @@ def register_routes(rt, store):
             ),
             history_content,
             event_id=event_id,
-            event_name=event["name"],
             active_link="history",
         )

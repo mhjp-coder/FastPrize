@@ -8,12 +8,16 @@ authors = [
 ]
 requires-python = ">=3.14"
 dependencies = [
+    "apsw>=3.53.4.0",
+    "argon2-cffi>=23.1.0",
+    "fastlite>=0.2.4",
     "python-fasthtml>=0.14.13",
     "segno>=1.6.6",
 ]
 
 [project.scripts]
 fastprize = "fastprize:main"
+fastprize-admin = "fastprize.auth_cli:main"
 
 [build-system]
 requires = [
