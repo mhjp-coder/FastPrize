@@ -16,3 +16,9 @@ fastprize.sqlite3
 fastprize.sqlite3-shm
 fastprize.sqlite3-wal
 .sesskey
+
+.env
+.env.*
+!.env.example
+data/
+backups/

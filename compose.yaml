@@ -1,0 +1,28 @@
+services:
+  app:
+    image: ${FASTPRIZE_IMAGE:-fastprize:local}
+    build:
+      context: .
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${FASTPRIZE_PORT:-5001}:5001"
+    environment:
+      FASTPRIZE_DB_PATH: /data/fastprize.sqlite3
+      FASTPRIZE_SESSION_SECRET: ${FASTPRIZE_SESSION_SECRET:?Set a stable session secret of at least 32 characters}
+      FASTPRIZE_COOKIE_SECURE: ${FASTPRIZE_COOKIE_SECURE:-true}
+      FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-}
+      FASTPRIZE_ADMIN_EMAIL: ${FASTPRIZE_ADMIN_EMAIL:-}
+      FASTPRIZE_ADMIN_PASSWORD: ${FASTPRIZE_ADMIN_PASSWORD:-}
+    volumes:
+      - fastprize-data:/data
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 30s
+
+volumes:
+  fastprize-data:

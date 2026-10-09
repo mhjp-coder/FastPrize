@@ -19,6 +19,43 @@ For a new database, set `FASTPRIZE_ADMIN_EMAIL` and `FASTPRIZE_ADMIN_PASSWORD` b
 
 Signed sessions last 7 days. Set `FASTPRIZE_SESSION_SECRET` to a stable, private signing secret (at least 32 characters) when deploying or running multiple workers. For HTTPS reverse-proxy deployments, set `FASTPRIZE_COOKIE_SECURE=true`, configure Uvicorn's `FORWARDED_ALLOW_IPS` to the exact proxy address(es), and configure the proxy to overwrite forwarded headers. Secure-cookie mode refuses to start without the explicit signing secret. Do not expose the app's upstream port directly to the Internet. Login throttling uses the submitted email and does not trust forwarded client-IP headers.
 
+## Docker Deployment
+
+The production image runs one Uvicorn worker as an unprivileged user. SQLite lives in the Compose-managed `fastprize-data` volume; rebuilding or replacing the container does not remove it. Compose publishes only on `127.0.0.1`, for an HTTPS reverse proxy on the same host. Keep the app as a single instance because it uses SQLite.
+
+For a local image, copy `.env.example` to `.env`, set `FASTPRIZE_SESSION_SECRET` to a randomly generated value of at least 32 characters (for example, `openssl rand -hex 32`), then run:
+
+```sh
+docker compose up -d --build
+docker compose logs -f app
+```
+
+For a GitHub Container Registry image, set `FASTPRIZE_IMAGE` in `.env` to `ghcr.io/OWNER/REPOSITORY:TAG`, authenticate Docker to `ghcr.io` if the package is private, then run `docker compose pull` followed by `docker compose up -d --no-build`. The GitHub Actions workflow tests and builds pull requests without publishing. Pushes to `main` and version tags (`v*`) publish images; use the version or SHA tag to pin a deployment and roll back by restoring the previous tag.
+
+Configure the reverse proxy to replace, not append untrusted values to, `X-Forwarded-For` and `X-Forwarded-Proto`. Set `FORWARDED_ALLOW_IPS` to the exact proxy source IP address(es) as seen by the app container; do not use `*` on a network reachable by untrusted clients. Keep `FASTPRIZE_COOKIE_SECURE=true` when HTTPS terminates at the proxy. The public projector display and its read-only result polling URL remain accessible to anyone with their URL.
+
+Create the first admin from the persistent database without putting a password in shell history or `.env`:
+
+```sh
+docker compose exec app fastprize-admin create you@example.com
+```
+
+If locked out, reset and re-enable the account the same way:
+
+```sh
+docker compose exec app fastprize-admin reset-password you@example.com
+```
+
+Back up SQLite using its online backup API, which includes a consistent snapshot while the app is running:
+
+```sh
+mkdir -p backups
+docker compose exec -T app python -c 'import sqlite3; source = sqlite3.connect("/data/fastprize.sqlite3"); target = sqlite3.connect("/tmp/fastprize-backup.sqlite3"); source.backup(target); target.close(); source.close()'
+docker compose cp app:/tmp/fastprize-backup.sqlite3 backups/fastprize.sqlite3
+```
+
+Store backups outside the Compose volume and protect them as sensitive event data. Keep the same session secret across updates so deployments do not sign out every admin. Do not remove the named volume during routine upgrades (`docker compose down -v` deletes the database).
+
 Admins can create, disable, delete, and reset other admin accounts from **Admins**. The disable confirmation dialog also offers permanent deletion. The last enabled admin cannot be disabled or deleted. Deleting your own account signs you out. If all admins are locked out, run `uv run fastprize-admin reset-password you@example.com` on the machine with database access. A CLI password reset also re-enables the account and invalidates its existing sessions; password resets in the web UI leave the enabled state unchanged. Password entry is hidden in the terminal.
 
 Anyone with a projector display URL can view that event's current winner and draw details. Treat the URL as public information.
@@ -33,7 +70,7 @@ Open an event workspace, then select Draw beside an available prize. The app rec
 
 ## Draw History
 
-Draw timestamps are stored in UTC. The Draw history page displays them in the selected time zone, defaulting to the browser's local zone; the selection is saved in that browser.
+Draw timestamps are stored in UTC and displayed in each viewer's local time zone.
 
 The app uses local admin accounts but does not include audit-grade draw verification.
 
