@@ -17,6 +17,11 @@ Entrant CSV files require a `name` column and may include an `organization` colu
 
 ## Draws
 
-Open an event workspace, then select Draw beside an available prize. The app records each result and updates entrant eligibility using the event setting. Use **Live display** to open that event's separate live screen; it checks for new results automatically.
+Open an event workspace, then select Draw beside an available prize. The app records each result and updates entrant eligibility using the event setting. Use **Live display** to open that event's separate live screen; it checks for new results automatically. The winner's name and draw details remain on screen for three minutes, then a technology quote appears and changes every three minutes. Quotes are stored in `src/fastprize/quotes.txt`. The display's bottom-right theme control switches between light and dark modes and opens the color palette.
+
+## Draw History
+
+Draw timestamps are stored in UTC. The Draw history page displays them in the selected time zone, defaulting to the browser's local zone; the selection is saved in that browser.
 
 The app is intended for a trusted local operator and does not include user accounts or audit-grade draw verification.
+

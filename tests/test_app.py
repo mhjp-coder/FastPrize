@@ -1,15 +1,44 @@
 import re
+from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
-from fasthtml.common import Client
+from fasthtml.common import Client, to_xml
 
 from fastprize.app import create_app
+from fastprize.ui import TECHNOLOGY_QUOTES, winner_fragment
 
 
 def _test_client(app):
     client = Client(app)
     cast(Any, client).cli.follow_redirects = True
     return client
+
+
+def test_theme_controls_are_placed_in_responsive_navigation(tmp_path):
+    app, _ = create_app(tmp_path / "responsive-theme-controls.sqlite3")
+    page = _test_client(app).get("/").text
+    desktop_nav = re.search(r'<nav class="left drawer[^"]*">.*?</nav>', page, re.DOTALL)
+    mobile_nav = re.search(
+        r'<nav class="top s padding horizontal middle-align">.*?</nav>',
+        page,
+        re.DOTALL,
+    )
+
+    assert desktop_nav is not None
+    assert mobile_nav is not None
+    assert 'id="theme-controls-desktop"' in desktop_nav.group()
+    assert 'id="theme-controls-mobile"' in mobile_nav.group()
+    assert 'data-theme-mode="toggle"' in desktop_nav.group()
+    assert 'data-theme-mode="toggle"' in mobile_nav.group()
+    assert 'data-theme-mode-icon="true"' in desktop_nav.group()
+    assert 'data-theme-mode-icon="true"' in mobile_nav.group()
+    assert 'data-theme-picker-open="true"' in desktop_nav.group()
+    assert 'data-theme-picker-open="true"' in mobile_nav.group()
+    assert (
+        'class="horizontal middle-align small-space small-margin"'
+        in desktop_nav.group()
+    )
+    assert 'class="horizontal middle-align small-space"' in mobile_nav.group()
 
 
 def test_event_links_have_individual_compact_containers(tmp_path):
@@ -29,12 +58,56 @@ def test_event_links_have_individual_compact_containers(tmp_path):
     assert '<h3 class="small">Raffle</h3>' in page
 
 
+def test_events_page_highlights_selected_active_event(tmp_path):
+    app, store = create_app(tmp_path / "active-event-highlight.sqlite3")
+    active_id = store.create_event("Awards")
+    other_id = store.create_event("Raffle")
+    client = _test_client(app)
+
+    client.get(f"/events/{active_id}")
+    page = client.get("/events").text
+
+    active_link = re.search(
+        rf'<a href="/events/{active_id}"[^>]*class="[^"]*link responsive[^"]*"[^>]*>.*?</a>',
+        page,
+        re.DOTALL,
+    )
+    other_link = re.search(
+        rf'<a href="/events/{other_id}"[^>]*class="[^"]*link responsive[^"]*"[^>]*>.*?</a>',
+        page,
+        re.DOTALL,
+    )
+    assert active_link is not None
+    assert other_link is not None
+    assert 'aria-current="true"' in active_link.group()
+    assert "primary-container" in active_link.group()
+    assert "CURRENT EVENT" not in active_link.group()
+    assert 'aria-current="true"' not in other_link.group()
+    assert "surface-container" in other_link.group()
+
+
 def test_events_create_form_stacks_on_small_screens(tmp_path):
     app, _ = create_app(tmp_path / "responsive-event-form.sqlite3")
     page = _test_client(app).get("/events").text
 
     assert 'class="s12 m7 field label border fill round extra"' in page
     assert 'class="s12 m5 responsive extra primary"' in page
+
+
+def test_entrant_add_section_is_a_closed_expansion(tmp_path):
+    app, store = create_app(tmp_path / "entrant-add-expansion.sqlite3")
+    event_id = store.create_event("Awards")
+
+    page = _test_client(app).get(f"/events/{event_id}/entrants").text
+    details_tag = re.search(r'<details\b[^>]*id="entrant-add-expansion"[^>]*>', page)
+
+    assert details_tag is not None
+    assert "open" not in details_tag.group()
+    assert 'class="button primary responsive none"' in page
+    assert 'aria-expanded="false"' in page
+    assert "data-add-expansion-chevron" in page
+    assert ">expand_more</i>" in page
+    assert 'id="entrant-name"' in page
 
 
 def test_entrants_page_matches_management_card_layout(tmp_path):
@@ -64,6 +137,8 @@ def test_entrants_page_matches_management_card_layout(tmp_path):
     assert 'aria-label="Edit Ada Lovelace"' in page
     assert "<i>edit</i>" in page
     assert 'class="button circle primary"' in page
+    assert f'data-edit-target="entrant-info-{entrant_id}"' in page
+    assert page.count(f'data-hide-while-editing="entrant-info-{entrant_id}"') == 2
     assert f'hx-get="/events/{event_id}/entrants/{entrant_id}/edit"' in page
     assert f'hx-target="#entrant-info-{entrant_id}"' in page
     assert (
@@ -71,7 +146,7 @@ def test_entrants_page_matches_management_card_layout(tmp_path):
         in page
     )
     assert "style=" not in page
-    assert "<span>Remove</span>" not in page
+    assert "<i>delete</i><span>Remove</span>" in page
     assert 'aria-label="Organization (optional)"' in page
 
     edit_form = client.get(f"/events/{event_id}/entrants/{entrant_id}/edit").text
@@ -81,6 +156,7 @@ def test_entrants_page_matches_management_card_layout(tmp_path):
     assert 'class="circle"' in edit_form
     assert 'name="name" value="Ada Lovelace"' in edit_form
     assert 'name="organization" value="Engine Co"' in edit_form
+    assert "data-inline-edit" in edit_form
     assert f'hx-get="/events/{event_id}/entrants/{entrant_id}/display"' in edit_form
 
     display = client.get(f"/events/{event_id}/entrants/{entrant_id}/display").text
@@ -234,11 +310,11 @@ def test_workspace_contains_combined_csv_import_form(tmp_path):
     assert workspace.index('<h2 class="small">Prizes</h2>') < workspace.index(
         'id="csv-import"'
     )
-    assert (
-        '<section id="csv-import" class="s12 card padding secondary-container small-round vertical bottom-padding">'
-        in workspace
-    )
-    assert '<h2 class="small bottom-padding">Import CSV</h2>' in workspace
+    assert 'data-add-expansion="true"' in workspace
+    assert 'aria-expanded="false"' in workspace
+    assert 'class="button primary responsive none"' in workspace
+    assert "<span>Import CSV</span>" in workspace
+    assert 'class="s12 vertical"' in workspace
     assert f'action="/events/{event_id}/import"' in workspace
     assert workspace.count('type="file"') == 2
     assert 'for="entrants-file"' in workspace
@@ -427,6 +503,7 @@ def test_draw_page_uses_live_draw_prize_cards(tmp_path):
     link = client.get(f"/events/{event_id}/display-link").text
     assert '<h2 class="small">Live display</h2>' in link
     assert 'id="display-link-dialog"' in link
+    assert 'data-close-on-backdrop="true"' in link
     assert 'class="modal padding medium-width left-align"' in link
     assert 'data-auto-open="true"' in link
     assert f'href="http://testserver/events/{event_id}/display"' in link
@@ -445,8 +522,8 @@ def test_draw_page_uses_live_draw_prize_cards(tmp_path):
     )
     assert page.count("<i>casino</i><span>Draw</span>") == 2
     assert 'class="grid middle-align small-space top-margin bottom-margin"' in page
-    assert '<small class="s6"># 0007</small>' in page
-    assert page.index('<small class="s6"># 0007</small>') < page.index(
+    assert 'class="s6"># 0007</small>' in page
+    assert page.index('class="s6"># 0007</small>') < page.index(
         f'action="/events/{event_id}/draws/{first_prize_id}/preview"'
     )
     assert "style=" not in page
@@ -612,18 +689,78 @@ def test_awarded_prize_can_be_returned_to_pool_from_prizes_page(tmp_path):
     assert "Laptop" not in history_page
 
 
+def test_history_page_uses_striped_table_and_stacks_cell_details(tmp_path):
+    app, store = create_app(tmp_path / "history-layout.sqlite3")
+    event_id = store.create_event("Awards")
+    store.add_entrant(event_id, "Ada Lovelace", "Engine Co")
+    prize_id = store.add_prize(event_id, "Laptop", "Northwind")
+    store.draw(event_id, prize_id, chooser=lambda entrants: entrants[0])
+    client = _test_client(app)
+
+    page = client.get(f"/events/{event_id}/history").text
+
+    assert '<h1 class="small">Draw history</h1>' in page
+    assert "COMPLETED DRAWS" not in page
+    assert 'class="stripes"' in page
+    assert 'id="history-timezone"' in page
+    assert 'class="field label suffix border round fill small small-width"' in page
+    assert 'class="small-text"' in page
+    assert '<label for="history-timezone">Time zone</label>' in page
+    assert "<i>arrow_drop_down</i>" in page
+    assert "Times are stored in UTC." not in page
+    draw = store.draw_history(event_id)[0]
+    assert f'datetime="{draw["created_at"]}"' in page
+    assert 'data-history-time="true"' in page
+    assert f"{draw['created_at'].replace('T', ' ')[:19]} UTC" in page
+    assert re.search(
+        r'<td>\s*<div class="vertical">\s*<strong>Ada Lovelace</strong>'
+        r"<small>Engine Co</small>\s*</div>\s*</td>",
+        page,
+    )
+    assert re.search(
+        r'<td>\s*<div class="vertical">\s*<strong>Laptop</strong>'
+        r"<small>Northwind</small>\s*</div>\s*</td>",
+        page,
+    )
+
+
 def test_projector_live_result_uses_htmx_fragment(tmp_path):
     app, store = create_app(tmp_path / "projector-htmx.sqlite3")
     event_id = store.create_event("Awards")
     store.add_entrant(event_id, "Ada Lovelace", "Engine Co")
     prize_id = store.add_prize(event_id, "Laptop", "Northwind")
     client = _test_client(app)
+
+    empty_display = client.get(f"/events/{event_id}/display").text
+    assert '<body class="screen">' in empty_display
+    assert "/assets/fastprize-live-display-velvet-light-4k.png" in empty_display
+    assert "/assets/fastprize-live-display-velvet-dark-4k.png" in empty_display
+    assert "@media (max-height: 600px)" in empty_display
+    assert "@media (max-height: 480px)" in empty_display
+    assert ".live-display-quote" in empty_display
+    assert "align-self: center" in empty_display
+    assert 'id="live-display-theme-controls"' in empty_display
+    assert 'data-add-expansion="true"' in empty_display
+    assert 'data-theme-picker-open="true"' in empty_display
+    assert 'id="theme-color-picker"' in empty_display
+    assert "right: calc(100% + .5rem)" in empty_display
+    assert 'class="center-align live-display-lead"' in empty_display
+    assert "font-size: 5rem" in empty_display
+
     client.post(f"/events/{event_id}/draws/{prize_id}/preview")
 
     display = client.get(f"/events/{event_id}/display").text
     assert f'hx-get="/events/{event_id}/display/latest-fragment"' in display
     assert 'hx-trigger="every 1s"' in display
-
+    assert 'class="upper secondary-text center-align live-display-heading"' in display
+    assert 'class="secondary-text"' in display
+    assert 'class="live-display-footer center-align padding"' in display
+    assert 'src="/assets/fastprize-logo.svg"' in display
+    assert ">FastPrize</h6>" in display
+    assert "FastPrize | Live draw" not in display
+    assert 'class="responsive center-align vertical"' in display
+    assert 'class="vertical center-align"' in display
+    assert "top: 1rem" in display
     fragment = client.get(
         f"/events/{event_id}/display/latest-fragment",
         headers={"HX-Request": "true"},
@@ -631,8 +768,47 @@ def test_projector_live_result_uses_htmx_fragment(tmp_path):
     assert "<!doctype html>" not in fragment
     assert 'id="live-result"' in fragment
     assert 'hx-swap="outerHTML"' in fragment
+    assert 'class="center-align live-display-lead"' in fragment
+    assert 'data-display-state="winner"' in fragment
     assert "Ada Lovelace" in fragment
-    assert "Laptop" in fragment
+    assert ">Engine Co</h6>" in fragment
+    assert "<strong>Laptop</strong>" in fragment
+    assert "<strong>Northwind</strong>" in fragment
+
+
+def test_live_display_replaces_expired_winner_with_stable_quote():
+    assert TECHNOLOGY_QUOTES
+    assert all(not re.match(r"^\d+\.\s", quote) for quote in TECHNOLOGY_QUOTES)
+    now = datetime.now(UTC)
+    draw = {
+        "id": 42,
+        "entrant_name": "Ada Lovelace",
+        "created_at": (now - timedelta(minutes=3, seconds=10)).isoformat(),
+    }
+
+    first_fragment = winner_fragment(draw, poll_url="/latest")
+    second_fragment = winner_fragment(draw, poll_url="/latest")
+    next_interval_draw = {
+        **draw,
+        "created_at": (now - timedelta(minutes=6, seconds=10)).isoformat(),
+    }
+    next_interval_fragment = winner_fragment(next_interval_draw, poll_url="/latest")
+
+    first_html = to_xml(first_fragment)
+    second_html = to_xml(second_fragment)
+    next_interval_html = to_xml(next_interval_fragment)
+    selected_quote = next(quote for quote in TECHNOLOGY_QUOTES if quote in first_html)
+    assert (
+        f'<h1 class="center-align live-display-quote italic">"{selected_quote}"</h1>'
+        in first_html
+    )
+    assert first_html == second_html
+    assert first_html != next_interval_html
+    assert 'data-display-state="quote"' in first_html
+    assert 'id="live-result"' in first_html
+    assert 'hx-get="/latest"' in first_html
+    assert 'class="center-align live-display-quote italic"' in first_html
+    assert "Ada Lovelace" not in first_html
 
 
 def test_event_workflow_and_live_display(tmp_path):
@@ -645,8 +821,8 @@ def test_event_workflow_and_live_display(tmp_path):
     assert "Draw Center" in home.text
     assert 'href="/assets/fastprize-favicon.svg"' in home.text
     assert "/assets/fastprize-logo.svg" in home.text
-    assert 'src="/assets/theme.js?v=2"' in home.text
-    assert 'src="/assets/interactions.js"' in home.text
+    assert 'src="/assets/theme.js?v=5"' in home.text
+    assert 'src="/assets/interactions.js?v=10"' in home.text
     assert client.get("/assets/fastprize-logo.svg").status_code == 200
     assert client.get("/assets/fastprize-favicon.svg").status_code == 200
     assert (
@@ -661,7 +837,11 @@ def test_event_workflow_and_live_display(tmp_path):
     assert "Your events" not in home.text
     assert "DRAW OPERATIONS" not in home.text
     assert 'href="/events"' in home.text
-    assert "Create event" not in home.text
+    assert "Create event" in home.text
+    assert (
+        'href="/events" class="button primary responsive extra bottom-margin"'
+        in home.text
+    )
     assert "beercss@5.0.3/dist/cdn/beer.min.css" in home.text
     assert "beercss@5.0.3/dist/cdn/beer.min.js" in home.text
     assert "htmx.org@" in home.text
@@ -669,10 +849,20 @@ def test_event_workflow_and_live_display(tmp_path):
         "material-dynamic-colors@1.1.4/dist/cdn/material-dynamic-colors.min.js"
         in home.text
     )
-    assert 'data-theme-mode="toggle"' in home.text
-    assert 'data-theme-color="#009688"' in home.text
-    assert 'data-theme-color="#ffc107"' in home.text
-    assert 'data-theme-color="#0277bd"' in home.text
+    assert home.text.count('data-theme-mode="toggle"') == 2
+    assert 'id="theme-controls-desktop"' in home.text
+    assert 'id="theme-controls-mobile"' in home.text
+    assert 'id="theme-color-picker"' in home.text
+    assert home.text.count('data-theme-picker-open="true"') == 2
+    assert home.text.count("<i>palette</i>") == 2
+    assert 'class="circle transparent"' in home.text
+    assert 'aria-haspopup="dialog"' in home.text
+    assert 'id="theme-color-picker"' in home.text
+    assert 'aria-label="Choose theme color"' in home.text
+    assert '<form method="dialog"' in home.text
+    for color in ("#607d8b", "#394cb1", "#e63c31", "#44a249", "#ead835"):
+        assert f'data-theme-color="{color}"' in home.text
+        assert f'style="background-color: {color}"' in home.text
     assert '<body class="light"' in home.text
     assert "<style" not in home.text.lower()
     assert "class-=" not in home.text
@@ -690,7 +880,7 @@ def test_event_workflow_and_live_display(tmp_path):
         "Your events"
     )
     assert "EVENTS" not in events_page.text
-    assert 'class="grid middle-align bottom-padding"' in events_page.text
+    assert 'class="grid bottom-padding"' in events_page.text
     assert 'class="primary-text"' in events_page.text
     assert "Create event" in events_page.text
     assert 'class="s12 m7 field label border fill round extra"' in events_page.text
@@ -713,7 +903,7 @@ def test_event_workflow_and_live_display(tmp_path):
     assert "<div>Live display</div>" in workspace.text
     assert "Public display" not in workspace.text
     assert "Open projector display" not in workspace.text
-    assert 'class="active bottom-margin"' in workspace.text
+    assert 'class="active tiny-margin bottom-margin"' in workspace.text
     assert (
         'class="card padding primary-container small-round vertical bottom-padding"'
         in workspace.text
@@ -727,14 +917,12 @@ def test_event_workflow_and_live_display(tmp_path):
         == 4
     )
     assert (
-        '<section class="s12 m6 card padding secondary-container small-round vertical bottom-padding"><h2 class="small">Entrants</h2>'
+        '<section class="s12 m6 card padding secondary-container small-round vertical bottom-padding">'
         in workspace.text
     )
-    assert (
-        '<section class="s12 m6 card padding secondary-container small-round vertical bottom-padding"><h2 class="small">Prizes</h2>'
-        in workspace.text
-    )
-    assert workspace.text.count('<h3 class="large-text">0</h3>') == 4
+    assert '<h2 class="small">Entrants</h2>' in workspace.text
+    assert '<h2 class="small">Prizes</h2>' in workspace.text
+    assert workspace.text.count('<h3 class="extra">0</h3>') == 4
     assert 'class="grid small-space"' in workspace.text
     assert all(
         label in workspace.text
@@ -790,7 +978,10 @@ def test_event_workflow_and_live_display(tmp_path):
     assert 'data-filename-target="entrants-file-name"' in import_page.text
     assert 'data-filename-target="prizes-file-name"' in import_page.text
     assert import_page.text.count("attach_file") == 2
-    assert import_page.text.count('type="submit"') == 1
+    assert (
+        '<button type="submit" class="s12 responsive extra primary">'
+        in import_page.text
+    )
 
     imported = client.post(
         f"/events/{event_id}/entrants/import",
@@ -889,10 +1080,11 @@ def test_event_workflow_and_live_display(tmp_path):
 
     preview_page = client.post(f"/events/{event_id}/draws/{prize_id}/preview")
     assert preview_page.status_code == 200
+    preview_winner_id = store.latest_preview(event_id)["entrant_id"]
     preview = client.get(
-        f"/events/{event_id}/draw?preview={prize_id}&winner={store.entrants(event_id)[0]['id']}"
+        f"/events/{event_id}/draw?preview={prize_id}&winner={preview_winner_id}"
     )
-    assert "Confirm draw" in preview.text
+    assert store.latest_preview(event_id)["entrant_name"] in preview.text
     assert "Award winner" in preview.text
     assert "Redraw" in preview.text
 
@@ -989,10 +1181,16 @@ def test_prize_mutations_return_htmx_fragments(tmp_path):
     headers = {"HX-Request": "true"}
 
     page = client.get(f"/events/{event_id}/prizes").text
+    assert 'id="prize-add-expansion"' in page
+    assert 'data-add-expansion="true"' in page
+    assert 'aria-expanded="false"' in page
+    assert "data-add-expansion-chevron" in page
+    assert ">expand_more</i>" in page
     assert 'id="prize-number"' in page
     assert 'class="grid middle-align small-space top-margin bottom-margin"' in page
-    assert '<small class="s6"># 0007</small>' in page
-    assert page.index('<small class="s6"># 0007</small>') < page.index(
+    assert 'class="s6"># 0007</small>' in page
+    assert f'data-hide-while-editing="prize-info-{prize_id}"' in page
+    assert page.index('class="s6"># 0007</small>') < page.index(
         f'hx-get="/events/{event_id}/prizes/{prize_id}/edit"'
     )
     assert "style=" not in page
@@ -1001,6 +1199,8 @@ def test_prize_mutations_return_htmx_fragments(tmp_path):
         'class="s12 m6 l6 card padding tertiary-container small-round vertical"' in page
     )
     assert f'id="prize-row-{prize_id}"' in page
+    assert f'data-edit-target="prize-info-{prize_id}"' in page
+    assert page.count(f'data-hide-while-editing="prize-info-{prize_id}"') == 3
     assert f'hx-get="/events/{event_id}/prizes/{prize_id}/edit"' in page
     assert f'hx-post="/events/{event_id}/prizes/{prize_id}/remove"' in page
     prize_dialog = f"remove-prize-dialog-{prize_id}"
@@ -1019,6 +1219,7 @@ def test_prize_mutations_return_htmx_fragments(tmp_path):
     assert 'name="name" value="Laptop"' in edit_form
     assert 'name="sponsor" value="Northwind"' in edit_form
     assert 'name="number" value="0007"' in edit_form
+    assert "data-inline-edit" in edit_form
     assert edit_form.count('class="field round fill border"') == 3
     assert 'class="circle primary"' in edit_form
     assert 'class="circle"' in edit_form
@@ -1034,7 +1235,7 @@ def test_prize_mutations_return_htmx_fragments(tmp_path):
     assert "<!doctype html>" not in edited.text
     assert f'id="prize-row-{prize_id}"' in edited.text
     assert "Tablet" in edited.text
-    assert '<small class="s6"># 0009</small>' in edited.text
+    assert 'class="s6"># 0009</small>' in edited.text
     assert store.prizes(event_id)[0]["number"] == "0009"
     assert "Prize updated." not in edited.text
 

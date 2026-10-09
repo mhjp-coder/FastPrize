@@ -1,10 +1,14 @@
 from fasthtml.common import (
     H1,
     A,
+    Article,
     Div,
     HTTPException,
     I,
+    Label,
+    Option,
     P,
+    Select,
     Small,
     Strong,
     Table,
@@ -12,6 +16,7 @@ from fasthtml.common import (
     Td,
     Th,
     Thead,
+    Time,
     Tr,
 )
 
@@ -27,30 +32,62 @@ def register_routes(rt, store):
         history = store.draw_history(event_id)
         rows = [
             Tr(
-                Td(Strong(draw["entrant_name"]), Small(draw["organization"])),
-                Td(Strong(draw["prize_name"]), Small(draw["sponsor"])),
-                Td(draw["created_at"].replace("T", " ")[:16]),
+                Td(
+                    Div(
+                        Strong(draw["entrant_name"]),
+                        Small(draw["organization"]),
+                        cls="vertical",
+                    )
+                ),
+                Td(
+                    Div(
+                        Strong(draw["prize_name"]),
+                        Small(draw["sponsor"]),
+                        cls="vertical",
+                    )
+                ),
+                Td(
+                    Time(
+                        f"{draw['created_at'].replace('T', ' ')[:19]} UTC",
+                        datetime=draw["created_at"],
+                        data_history_time="true",
+                    )
+                ),
             )
             for draw in history
         ]
-        return document(
-            f"FastPrize | {event['name']} | Draw history",
-            Div(
-                Div("COMPLETED DRAWS", cls="upper small-text secondary-text"),
-                H1("Draw history", cls="small"),
-                P(f"{len(history)} completed"),
-                cls="vertical",
-            ),
-            Div(
-                Table(
-                    Thead(Tr(Th("Winner"), Th("Prize"), Th("Time"))),
-                    Tbody(*rows),
-                    cls="border stripes",
+        history_content = (
+            Article(
+                Div(
+                    Table(
+                        Thead(
+                            Tr(
+                                Th("Winner"),
+                                Th("Prize"),
+                                Th(
+                                    Div(
+                                        Select(
+                                            Option(
+                                                "UTC", value="UTC", cls="small-text"
+                                            ),
+                                            id="history-timezone",
+                                        ),
+                                        Label("Time zone", fr="history-timezone"),
+                                        I("arrow_drop_down"),
+                                        cls="field label suffix border round fill small small-width",
+                                    )
+                                ),
+                            )
+                        ),
+                        Tbody(*rows),
+                        cls="stripes",
+                    ),
+                    cls="responsive scroll",
                 ),
-                cls="responsive scroll",
+                cls="card padding secondary-container small-round vertical bottom-padding",
             )
             if history
-            else Div(
+            else Article(
                 P("Completed draws will appear here.", cls="surface-variant padding"),
                 A(
                     I("casino"),
@@ -58,8 +95,17 @@ def register_routes(rt, store):
                     href=f"/events/{event_id}/draw",
                     cls="tertiary large",
                 ),
-                cls="vertical",
+                cls="card padding secondary-container small-round vertical",
+            )
+        )
+        return document(
+            f"FastPrize | {event['name']} | Draw history",
+            Article(
+                H1("Draw history", cls="small"),
+                P(f"{len(history)} completed"),
+                cls="card padding primary-container small-round vertical bottom-margin",
             ),
+            history_content,
             event_id=event_id,
             event_name=event["name"],
             active_link="history",

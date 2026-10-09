@@ -3,6 +3,7 @@ from fasthtml.common import (
     H2,
     Article,
     Button,
+    Details,
     Dialog,
     Div,
     Form,
@@ -16,6 +17,7 @@ from fasthtml.common import (
     Small,
     Span,
     Strong,
+    Summary,
 )
 
 from fastprize.ui import document, redirect_event, status_message
@@ -98,15 +100,19 @@ def register_routes(rt, store):
                         cls="modal padding medium-width left-align",
                     ),
                 ),
-                Button(
-                    I("edit"),
-                    type="button",
-                    title=f"Edit {entrant['name']}",
-                    aria_label=f"Edit {entrant['name']}",
-                    cls="button circle primary",
-                    hx_get=f"/events/{event_id}/entrants/{entrant_id}/edit",
-                    hx_target=f"#entrant-info-{entrant_id}",
-                    hx_swap="outerHTML",
+                Div(
+                    Button(
+                        I("edit"),
+                        type="button",
+                        title=f"Edit {entrant['name']}",
+                        aria_label=f"Edit {entrant['name']}",
+                        cls="button circle primary",
+                        hx_get=f"/events/{event_id}/entrants/{entrant_id}/edit",
+                        hx_target=f"#entrant-info-{entrant_id}",
+                        hx_swap="outerHTML",
+                        data_edit_target=f"entrant-info-{entrant_id}",
+                    ),
+                    data_hide_while_editing=f"entrant-info-{entrant_id}",
                 ),
                 Div(
                     Button(
@@ -151,6 +157,7 @@ def register_routes(rt, store):
                         aria_label=f"Confirm removing {entrant['name']}",
                         cls="modal padding medium-width left-align",
                     ),
+                    data_hide_while_editing=f"entrant-info-{entrant_id}",
                 ),
                 cls="horizontal middle-align small-space top-margin right-align bottom-margin",
             ),
@@ -201,40 +208,50 @@ def register_routes(rt, store):
                 cls="card padding primary-container small-round vertical bottom-margin",
             ),
             P(message, cls="tertiary-container padding") if message else "",
-            Article(
-                H2("Add", cls="small"),
-                Form(
-                    Div(
-                        Input(
-                            id="entrant-name",
-                            name="name",
-                            required=True,
-                            type="text",
-                        ),
-                        Label("Full name", fr="entrant-name"),
-                        cls="s6 m6 l6 field label border fill round extra",
-                    ),
-                    Div(
-                        Input(
-                            id="entrant-organization",
-                            name="organization",
-                            type="text",
-                            aria_label="Organization (optional)",
-                        ),
-                        Label("Organization", fr="entrant-organization"),
-                        cls="s6 m6 l6 field label border fill round extra",
-                    ),
-                    Button(
-                        I("person_add"),
-                        Span("Add entrant"),
-                        type="submit",
-                        cls="s12 responsive extra primary",
-                    ),
-                    action=f"/events/{event_id}/entrants",
-                    method="post",
-                    cls="grid small-space bottom-padding",
+            Details(
+                Summary(
+                    I("expand_more", data_add_expansion_chevron=True),
+                    Span("Add entrant"),
+                    cls="button primary responsive none",
+                    aria_expanded="false",
                 ),
-                cls="card padding secondary-container small-round vertical bottom-padding",
+                Article(
+                    Form(
+                        Div(
+                            Input(
+                                id="entrant-name",
+                                name="name",
+                                required=True,
+                                type="text",
+                            ),
+                            Label("Full name", fr="entrant-name"),
+                            cls="s6 m6 l6 field label border fill round extra",
+                        ),
+                        Div(
+                            Input(
+                                id="entrant-organization",
+                                name="organization",
+                                type="text",
+                                aria_label="Organization (optional)",
+                            ),
+                            Label("Organization", fr="entrant-organization"),
+                            cls="s6 m6 l6 field label border fill round extra",
+                        ),
+                        Button(
+                            I("person_add"),
+                            Span("Add entrant"),
+                            type="submit",
+                            cls="s12 responsive extra primary",
+                        ),
+                        action=f"/events/{event_id}/entrants",
+                        method="post",
+                        cls="grid small-space bottom-padding",
+                    ),
+                    cls="card padding secondary-container small-round vertical bottom-padding",
+                ),
+                id="entrant-add-expansion",
+                data_add_expansion="true",
+                cls="vertical bottom-margin",
             ),
             Article(
                 Div(
@@ -344,6 +361,7 @@ def register_routes(rt, store):
             hx_swap="outerHTML",
             cls="grid middle-align small-space",
             id=f"entrant-info-{entrant_id}",
+            data_inline_edit=True,
         )
 
     @rt("/events/{event_id}/entrants/{entrant_id}/display", methods=["GET"])

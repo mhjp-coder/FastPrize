@@ -1,10 +1,15 @@
 import json
+import random
+from datetime import UTC, datetime, timedelta
+from importlib.resources import files
 from urllib.parse import quote
 
 from fasthtml.common import (
     H1,
     H2,
     H3,
+    H5,
+    H6,
     A,
     Body,
     Button,
@@ -13,7 +18,6 @@ from fasthtml.common import (
     Footer,
     Form,
     Head,
-    Header,
     Html,
     I,
     Img,
@@ -35,6 +39,14 @@ from fasthtml.common import (
 from segno import make as make_qr
 
 EVENT_SELECTION_COOKIE = "fastprize_event_id"
+TECHNOLOGY_QUOTES = tuple(
+    line.strip()
+    for line in files("fastprize")
+    .joinpath("quotes.txt")
+    .read_text(encoding="utf-8")
+    .splitlines()
+    if line.strip()
+)
 
 
 STATUS_MESSAGES = {
@@ -100,6 +112,45 @@ def status_message(status: str) -> str:
     return STATUS_MESSAGES.get(status, "")
 
 
+def theme_color_picker_dialog():
+    colors = [
+        ("Blue grey", "#607d8b"),
+        ("Indigo", "#394cb1"),
+        ("Red", "#e63c31"),
+        ("Green", "#44a249"),
+        ("Yellow", "#ead835"),
+    ]
+    return Dialog(
+        H2("Choose theme color", cls="small"),
+        Nav(
+            *(
+                Button(
+                    Span(),
+                    type="button",
+                    title=f"{name} theme",
+                    aria_label=f"Use {name.lower()} theme",
+                    data_theme_color=color,
+                    style=f"background-color: {color}",
+                    cls="circle",
+                )
+                for name, color in colors
+            ),
+            cls="horizontal wrap center-align small-space large-margin",
+        ),
+        Nav(
+            Form(
+                Button("Close", type="submit", cls="text"),
+                method="dialog",
+            ),
+            cls="right-align",
+        ),
+        id="theme-color-picker",
+        aria_label="Choose theme color",
+        data_close_on_backdrop="true",
+        cls="modal padding medium-width left-align",
+    )
+
+
 def document(
     title: str,
     *content,
@@ -114,8 +165,9 @@ def document(
                 *content,
                 cls="responsive center-align padding vertical middle-align",
             ),
+            theme_color_picker_dialog(),
         )
-        body_class = "dark"
+        body_class = "screen"
     else:
         page_links = [("Events", "events", "/events", "calendar_month")]
         if event_id is not None:
@@ -195,6 +247,7 @@ def document(
             brand_mark(),
             href="/",
             aria_label="FastPrize home",
+            cls="max",
         )
         sidebar_brand = A(
             brand_mark(80, 50),
@@ -202,55 +255,49 @@ def document(
             aria_label="FastPrize home",
             cls="circle",
         )
+
+        def theme_controls(placement: str):
+            controls_class = "horizontal middle-align small-space"
+            if placement == "desktop":
+                controls_class += " small-margin"
+            return Div(
+                Button(
+                    I("dark_mode", data_theme_mode_icon="true"),
+                    type="button",
+                    title="Switch to dark mode",
+                    aria_label="Switch to dark mode",
+                    data_theme_mode="toggle",
+                    cls="circle transparent",
+                ),
+                Button(
+                    I("palette"),
+                    type="button",
+                    title="Choose theme color",
+                    aria_label="Choose theme color",
+                    aria_haspopup="dialog",
+                    aria_controls="theme-color-picker",
+                    data_theme_picker_open="true",
+                    cls="circle transparent",
+                ),
+                cls=controls_class,
+                id=f"theme-controls-{placement}",
+            )
+
         body_content = (
             Nav(
                 Div(sidebar_brand, cls="bottom-margin"),
                 *navigation,
+                Div(cls="max"),
+                theme_controls("desktop"),
                 cls="left drawer large-padding max m l small-width surface-container",
             ),
             Nav(
                 brand,
-                cls="top s padding",
-            ),
-            Header(
-                Div(
-                    Button(
-                        I("dark_mode"),
-                        type="button",
-                        title="Toggle light or dark mode",
-                        aria_label="Toggle light or dark mode",
-                        data_theme_mode="toggle",
-                        cls="circle flat large",
-                    ),
-                    Button(
-                        Span(),
-                        type="button",
-                        title="Teal theme",
-                        aria_label="Use teal theme",
-                        data_theme_color="#009688",
-                        cls="circle teal",
-                    ),
-                    Button(
-                        Span(),
-                        type="button",
-                        title="Amber theme",
-                        aria_label="Use amber theme",
-                        data_theme_color="#ffc107",
-                        cls="circle amber",
-                    ),
-                    Button(
-                        Span(),
-                        type="button",
-                        title="Blue theme",
-                        aria_label="Use blue theme",
-                        data_theme_color="#0277bd",
-                        cls="circle blue",
-                    ),
-                    cls="horizontal middle-align small-space",
-                ),
-                cls="large-padding horizontal middle-align right-align responsive",
+                theme_controls("mobile"),
+                cls="top s padding horizontal middle-align",
             ),
             Main(*content, cls="responsive large-padding"),
+            theme_color_picker_dialog(),
             Div(id="display-link-modal") if event_id is not None else "",
             Div(cls="extra-space"),
             Footer(
@@ -283,8 +330,8 @@ def document(
                 src="https://cdn.jsdelivr.net/npm/beercss@5.0.3/dist/cdn/beer.min.js",
                 type="module",
             ),
-            Script(src="/assets/theme.js?v=2", type="module"),
-            Script(src="/assets/interactions.js", type="module"),
+            Script(src="/assets/theme.js?v=5", type="module"),
+            Script(src="/assets/interactions.js?v=10", type="module"),
         ),
         Body(*body_content, cls=body_class),
     )
@@ -308,24 +355,58 @@ def winner_fragment(draw: dict | None, poll_url: str | None = None):
     )
     if draw is None:
         return Div(
-            H1("The next name could be yours.", cls="center-align"),
+            H1("The next name could be yours.", cls="center-align live-display-lead"),
             id="live-result",
+            cls="vertical center-align",
             data_draw_id="",
             **poll_attrs,
         )
+    drawn_at = datetime.fromisoformat(draw["created_at"])
+    if drawn_at.tzinfo is None:
+        drawn_at = drawn_at.replace(tzinfo=UTC)
+    elapsed = datetime.now(UTC) - drawn_at.astimezone(UTC)
+    quote_interval = int(elapsed // timedelta(minutes=3))
+    if quote_interval >= 1:
+        quote_order = list(TECHNOLOGY_QUOTES)
+        random.Random(str(draw["id"])).shuffle(quote_order)
+        quote = quote_order[(quote_interval - 1) % len(quote_order)]
+        return Div(
+            H1(f'"{quote}"', cls="center-align live-display-quote italic"),
+            id="live-result",
+            cls="vertical center-align",
+            data_draw_id=str(draw["id"]),
+            data_result_version=draw["created_at"],
+            data_display_state="quote",
+            **poll_attrs,
+        )
     return Div(
-        P("The winner is", cls="upper small-text tertiary-text center-align"),
-        H1(draw["entrant_name"], cls="center-align"),
-        P(draw["organization"] or "", cls="medium-text center-align"),
-        Div(
-            Strong(draw["prize_name"]),
-            Span("from"),
+        H5("The winner is", cls="upper tertiary-text center-align"),
+        Div(cls="medium-space"),
+        H1(draw["entrant_name"], cls="center-align live-display-lead"),
+        *(
+            (
+                Div(cls="tiny-space"),
+                P("from", cls="small-text center-align no-margin"),
+                H6(draw["organization"], cls="center-align"),
+                Div(cls="small-space"),
+            )
+            if draw["organization"]
+            else (Div(cls="small-space"),)
+        ),
+        Div(cls="medium-space"),
+        H6(Strong(draw["prize_name"]), cls="center-align no-margin"),
+        Div(cls="small-space"),
+        P("Sponsored by", cls="small-text center-align no-margin"),
+        Div(cls="small-space"),
+        H6(
             Strong(draw["sponsor"] or "our conference sponsors"),
-            cls="horizontal center-align",
+            cls="center-align no-margin",
         ),
         id="live-result",
+        cls="vertical center-align",
         data_draw_id=str(draw["id"]),
         data_result_version=draw["created_at"],
+        data_display_state="winner",
         **poll_attrs,
     )
 
@@ -358,6 +439,7 @@ def display_link_modal(display_url: str):
             id="display-link-dialog",
             aria_label="Live draw display link",
             data_auto_open="true",
+            data_close_on_backdrop="true",
             cls="modal padding medium-width left-align",
         ),
     )

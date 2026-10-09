@@ -5,6 +5,7 @@ from fasthtml.common import (
     A,
     Article,
     Button,
+    Details,
     Dialog,
     Div,
     Form,
@@ -18,6 +19,7 @@ from fasthtml.common import (
     Request,
     Section,
     Span,
+    Summary,
 )
 
 from fastprize.ui import (
@@ -135,14 +137,26 @@ def register_routes(rt, store):
     def events_page(req: Request):
         selected_event = _selected_event(req, store)
         events = store.list_events()
-        event_links = [
-            A(
-                H3(event["name"], cls="small"),
-                href=f"/events/{event['id']}",
-                cls="s12 m6 l4 link responsive center-align padding surface-container small-round",
+        event_links = []
+        for event in events:
+            is_active = (
+                selected_event is not None and event["id"] == selected_event["id"]
             )
-            for event in events
-        ]
+            event_links.append(
+                A(
+                    Div(
+                        H3(event["name"], cls="small"),
+                        cls="vertical center-align",
+                    ),
+                    href=f"/events/{event['id']}",
+                    cls=(
+                        "s12 m6 l4 link responsive center-align padding "
+                        f"{'primary-container' if is_active else 'surface-container'} "
+                        "small-round"
+                    ),
+                    aria_current="true" if is_active else None,
+                )
+            )
         return document(
             "FastPrize | Events",
             Article(
@@ -250,121 +264,130 @@ def register_routes(rt, store):
                     ),
                     cls="s12 m6 card padding secondary-container small-round vertical bottom-padding",
                 ),
-                Section(
-                    H2("Import CSV", cls="small bottom-padding"),
-                    Form(
-                        Div(
+                Details(
+                    Summary(
+                        I("expand_more", data_add_expansion_chevron=True),
+                        Span("Import CSV"),
+                        cls="button primary responsive none",
+                        aria_expanded="false",
+                    ),
+                    Article(
+                        Form(
                             Div(
-                                H3("Entrants", cls="small"),
-                                Button(
-                                    I("info"),
-                                    type="button",
-                                    title="Entrant CSV requirements",
-                                    aria_label="Entrant CSV requirements",
-                                    aria_haspopup="dialog",
-                                    aria_controls="entrants-csv-info",
-                                    data_ui="#entrants-csv-info",
-                                    cls="circle transparent",
-                                ),
-                                cls="horizontal middle-align small-space bottom-margin",
-                            ),
-                            Dialog(
-                                H2("Entrants CSV", cls="small"),
-                                P("Required: name. Optional: organization."),
-                                Nav(
+                                Div(
+                                    H3("Entrants", cls="small"),
                                     Button(
-                                        "Close",
+                                        I("info"),
                                         type="button",
+                                        title="Entrant CSV requirements",
+                                        aria_label="Entrant CSV requirements",
+                                        aria_haspopup="dialog",
+                                        aria_controls="entrants-csv-info",
                                         data_ui="#entrants-csv-info",
-                                        cls="text",
+                                        cls="circle transparent",
                                     ),
-                                    cls="right-align",
+                                    cls="horizontal middle-align small-space bottom-margin",
                                 ),
-                                id="entrants-csv-info",
-                                aria_label="Entrant CSV requirements",
-                                data_close_on_backdrop="true",
-                                cls="modal padding medium-width left-align",
+                                Dialog(
+                                    H2("Entrants CSV", cls="small"),
+                                    P("Required: name. Optional: organization."),
+                                    Nav(
+                                        Button(
+                                            "Close",
+                                            type="button",
+                                            data_ui="#entrants-csv-info",
+                                            cls="text",
+                                        ),
+                                        cls="right-align",
+                                    ),
+                                    id="entrants-csv-info",
+                                    aria_label="Entrant CSV requirements",
+                                    data_close_on_backdrop="true",
+                                    cls="modal padding medium-width left-align",
+                                ),
+                                Label(
+                                    I("attach_file"),
+                                    Span("Entrants CSV", id="entrants-file-name"),
+                                    fr="entrants-file",
+                                    cls="button secondary",
+                                ),
+                                Input(
+                                    id="entrants-file",
+                                    type="file",
+                                    name="entrants_file",
+                                    accept=".csv,text/csv",
+                                    hidden=True,
+                                    data_filename_target="entrants-file-name",
+                                ),
+                                cls="s12 m6 l6 vertical",
                             ),
-                            Label(
-                                I("attach_file"),
-                                Span("Entrants CSV", id="entrants-file-name"),
-                                fr="entrants-file",
-                                cls="button secondary",
-                            ),
-                            Input(
-                                id="entrants-file",
-                                type="file",
-                                name="entrants_file",
-                                accept=".csv,text/csv",
-                                hidden=True,
-                                data_filename_target="entrants-file-name",
-                            ),
-                            cls="s12 m6 l6 vertical",
-                        ),
-                        Div(
                             Div(
-                                H3("Prizes", cls="small"),
-                                Button(
-                                    I("info"),
-                                    type="button",
-                                    title="Prize CSV requirements",
-                                    aria_label="Prize CSV requirements",
-                                    aria_haspopup="dialog",
-                                    aria_controls="prizes-csv-info",
-                                    data_ui="#prizes-csv-info",
-                                    cls="circle transparent",
-                                ),
-                                cls="horizontal middle-align small-space bottom-margin",
-                            ),
-                            Dialog(
-                                H2("Prizes CSV", cls="small"),
-                                P(
-                                    "Required: prize_name. Optional: sponsor, "
-                                    "number (or prize_number)."
-                                ),
-                                Nav(
+                                Div(
+                                    H3("Prizes", cls="small"),
                                     Button(
-                                        "Close",
+                                        I("info"),
                                         type="button",
+                                        title="Prize CSV requirements",
+                                        aria_label="Prize CSV requirements",
+                                        aria_haspopup="dialog",
+                                        aria_controls="prizes-csv-info",
                                         data_ui="#prizes-csv-info",
-                                        cls="text",
+                                        cls="circle transparent",
                                     ),
-                                    cls="right-align",
+                                    cls="horizontal middle-align small-space bottom-margin",
                                 ),
-                                id="prizes-csv-info",
-                                aria_label="Prize CSV requirements",
-                                data_close_on_backdrop="true",
-                                cls="modal padding medium-width left-align",
+                                Dialog(
+                                    H2("Prizes CSV", cls="small"),
+                                    P(
+                                        "Required: prize_name. Optional: sponsor, "
+                                        "number (or prize_number)."
+                                    ),
+                                    Nav(
+                                        Button(
+                                            "Close",
+                                            type="button",
+                                            data_ui="#prizes-csv-info",
+                                            cls="text",
+                                        ),
+                                        cls="right-align",
+                                    ),
+                                    id="prizes-csv-info",
+                                    aria_label="Prize CSV requirements",
+                                    data_close_on_backdrop="true",
+                                    cls="modal padding medium-width left-align",
+                                ),
+                                Label(
+                                    I("attach_file"),
+                                    Span("Prizes CSV", id="prizes-file-name"),
+                                    fr="prizes-file",
+                                    cls="button secondary",
+                                ),
+                                Input(
+                                    id="prizes-file",
+                                    type="file",
+                                    name="prizes_file",
+                                    accept=".csv,text/csv",
+                                    hidden=True,
+                                    data_filename_target="prizes-file-name",
+                                ),
+                                cls="s12 m6 l6 vertical",
                             ),
-                            Label(
-                                I("attach_file"),
-                                Span("Prizes CSV", id="prizes-file-name"),
-                                fr="prizes-file",
-                                cls="button secondary",
+                            Button(
+                                I("upload_file"),
+                                "Import selected files",
+                                type="submit",
+                                cls="s12 responsive extra primary",
                             ),
-                            Input(
-                                id="prizes-file",
-                                type="file",
-                                name="prizes_file",
-                                accept=".csv,text/csv",
-                                hidden=True,
-                                data_filename_target="prizes-file-name",
-                            ),
-                            cls="s12 m6 l6 vertical",
+                            action=f"/events/{event_id}/import",
+                            method="post",
+                            enctype="multipart/form-data",
+                            cls="grid small-space",
                         ),
-                        Button(
-                            I("upload_file"),
-                            "Import selected files",
-                            type="submit",
-                            cls="s12 responsive extra primary",
-                        ),
-                        action=f"/events/{event_id}/import",
-                        method="post",
-                        enctype="multipart/form-data",
-                        cls="grid small-space",
+                        cls="card padding secondary-container small-round vertical bottom-padding",
                     ),
                     id="csv-import",
-                    cls="s12 card padding secondary-container small-round vertical bottom-padding",
+                    data_add_expansion="true",
+                    cls="s12 vertical",
                 ),
                 cls="grid small-space",
             ),

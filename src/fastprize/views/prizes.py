@@ -3,6 +3,7 @@ from fasthtml.common import (
     H2,
     Article,
     Button,
+    Details,
     Dialog,
     Div,
     Form,
@@ -16,6 +17,7 @@ from fasthtml.common import (
     Small,
     Span,
     Strong,
+    Summary,
 )
 
 from fastprize.ui import document, redirect_event, status_message
@@ -108,15 +110,19 @@ def register_routes(rt, store):
         else:
             award_status = ""
             actions = [
-                Button(
-                    I("edit"),
-                    type="button",
-                    title=f"Edit {prize['prize_name']}",
-                    aria_label=f"Edit {prize['prize_name']}",
-                    cls="button circle primary",
-                    hx_get=f"/events/{event_id}/prizes/{prize_id}/edit",
-                    hx_target=f"#prize-info-{prize_id}",
-                    hx_swap="outerHTML",
+                Div(
+                    Button(
+                        I("edit"),
+                        type="button",
+                        title=f"Edit {prize['prize_name']}",
+                        aria_label=f"Edit {prize['prize_name']}",
+                        cls="button circle primary",
+                        hx_get=f"/events/{event_id}/prizes/{prize_id}/edit",
+                        hx_target=f"#prize-info-{prize_id}",
+                        hx_swap="outerHTML",
+                        data_edit_target=f"prize-info-{prize_id}",
+                    ),
+                    data_hide_while_editing=f"prize-info-{prize_id}",
                 ),
                 Div(
                     Button(
@@ -161,13 +167,20 @@ def register_routes(rt, store):
                         aria_label=f"Confirm removing {prize['prize_name']}",
                         cls="modal padding medium-width left-align",
                     ),
+                    data_hide_while_editing=f"prize-info-{prize_id}",
                 ),
             ]
         return Article(
             prize_info(prize),
             award_status,
             Div(
-                Small(f"# {prize['number']}", cls="s6") if prize["number"] else "",
+                Small(
+                    f"# {prize['number']}",
+                    cls="s6",
+                    data_hide_while_editing=f"prize-info-{prize_id}",
+                )
+                if prize["number"]
+                else "",
                 Div(
                     *actions,
                     cls=(
@@ -236,50 +249,60 @@ def register_routes(rt, store):
                 cls="card padding primary-container small-round vertical bottom-margin",
             ),
             P(message, cls="tertiary-container padding") if message else "",
-            Article(
-                H2("Add prize", cls="small"),
-                Form(
-                    Div(
-                        Input(
-                            id="prize-name",
-                            name="name",
-                            required=True,
-                            type="text",
-                        ),
-                        Label("Prize name", fr="prize-name"),
-                        cls="s6 m6 l4 field label border fill round extra",
-                    ),
-                    Div(
-                        Input(
-                            id="prize-sponsor",
-                            name="sponsor",
-                            type="text",
-                            aria_label="Sponsor (optional)",
-                        ),
-                        Label("Sponsor", fr="prize-sponsor"),
-                        cls="s6 m6 l4 field label border fill round extra",
-                    ),
-                    Div(
-                        Input(
-                            id="prize-number",
-                            name="number",
-                            type="text",
-                            aria_label="Prize number (optional)",
-                        ),
-                        Label("Prize number", fr="prize-number"),
-                        cls="s6 m6 l4 field label border fill round extra",
-                    ),
-                    Button(
-                        I("add"),
-                        Span("Add prize"),
-                        type="submit",
-                        cls="s12 responsive extra primary",
-                    ),
-                    action=f"/events/{event_id}/prizes",
-                    method="post",
-                    cls="grid small-space bottom-padding",
+            Details(
+                Summary(
+                    I("expand_more", data_add_expansion_chevron=True),
+                    Span("Add prize"),
+                    cls="button primary responsive none",
+                    aria_expanded="false",
                 ),
-                cls="card padding secondary-container small-round vertical bottom-padding",
+                Article(
+                    Form(
+                        Div(
+                            Input(
+                                id="prize-name",
+                                name="name",
+                                required=True,
+                                type="text",
+                            ),
+                            Label("Prize name", fr="prize-name"),
+                            cls="s6 m6 l4 field label border fill round extra",
+                        ),
+                        Div(
+                            Input(
+                                id="prize-sponsor",
+                                name="sponsor",
+                                type="text",
+                                aria_label="Sponsor (optional)",
+                            ),
+                            Label("Sponsor", fr="prize-sponsor"),
+                            cls="s6 m6 l4 field label border fill round extra",
+                        ),
+                        Div(
+                            Input(
+                                id="prize-number",
+                                name="number",
+                                type="text",
+                                aria_label="Prize number (optional)",
+                            ),
+                            Label("Prize number", fr="prize-number"),
+                            cls="s6 m6 l4 field label border fill round extra",
+                        ),
+                        Button(
+                            I("add"),
+                            Span("Add prize"),
+                            type="submit",
+                            cls="s12 responsive extra primary",
+                        ),
+                        action=f"/events/{event_id}/prizes",
+                        method="post",
+                        cls="grid small-space bottom-padding",
+                    ),
+                    cls="card padding secondary-container small-round vertical bottom-padding",
+                ),
+                id="prize-add-expansion",
+                data_add_expansion="true",
+                cls="vertical bottom-margin",
             ),
             Article(
                 Div(
@@ -394,6 +417,7 @@ def register_routes(rt, store):
             hx_swap="outerHTML",
             cls="grid middle-align small-space",
             id=f"prize-info-{prize_id}",
+            data_inline_edit=True,
         )
 
     @rt("/events/{event_id}/prizes/{prize_id}/display", methods=["GET"])
