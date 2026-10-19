@@ -253,6 +253,17 @@ def test_event_workflow_and_live_display(tmp_path):
     assert "Laptop" in history_page.text
 
 
+def test_empty_history_page_does_not_offer_start_draw_link(tmp_path):
+    app, store = create_app(tmp_path / "empty-history.sqlite3")
+    event_id = store.create_event("Awards")
+    client = _test_client(app)
+
+    page = client.get(f"/events/{event_id}/history").text
+
+    assert '<p class="empty-note">Completed draws will appear here.</p>' in page
+    assert "Start a draw" not in page
+
+
 def test_operator_can_edit_and_remove_entrants_and_prizes(tmp_path):
     app, store = create_app(tmp_path / "manage.sqlite3")
     client = _test_client(app)
