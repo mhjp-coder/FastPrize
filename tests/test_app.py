@@ -830,6 +830,17 @@ def test_awarded_prize_can_be_returned_to_pool_from_prizes_page(tmp_path):
     assert "Laptop" not in history_page
 
 
+def test_empty_history_page_does_not_offer_start_draw_link(tmp_path):
+    app, store = create_app(tmp_path / "empty-history.sqlite3")
+    event_id = store.create_event("Awards")
+    client = _test_client(app)
+
+    page = client.get(f"/events/{event_id}/history").text
+
+    assert "<p>Completed draws will appear here.</p>" in page
+    assert "Start a draw" not in page
+
+
 def test_history_page_uses_striped_table_and_stacks_cell_details(tmp_path):
     app, store = create_app(tmp_path / "history-layout.sqlite3")
     event_id = store.create_event("Awards")

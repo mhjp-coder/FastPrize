@@ -1,11 +1,9 @@
 from fasthtml.common import (
     H1,
-    A,
     Article,
     Br,
     Div,
     HTTPException,
-    I,
     P,
     Small,
     Span,
@@ -81,13 +79,7 @@ def register_routes(rt, store):
             )
             if history
             else Article(
-                P("Completed draws will appear here.", cls="surface-variant padding"),
-                A(
-                    I("casino"),
-                    "Start a draw",
-                    href=f"/events/{event_id}/draw",
-                    cls="tertiary large",
-                ),
+                P("Completed draws will appear here."),
                 cls="card padding secondary-container small-round vertical",
             )
         )
