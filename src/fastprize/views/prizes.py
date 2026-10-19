@@ -1,20 +1,24 @@
 from fasthtml.common import (
-    H1,
-    Button,
-    Details,
     Div,
     Form,
     HTTPException,
-    Input,
     Li,
-    P,
     Section,
     Small,
     Strong,
-    Summary,
 )
+from monsterui.franken import Button, ButtonT, Card, Input
 
-from fastprize.ui import document, record_list, redirect_event, status_message
+from fastprize.ui import (
+    document,
+    page_header,
+    record_list,
+    redirect_event,
+    search_card,
+    stat_card,
+    status_banner,
+    status_message,
+)
 
 
 def register_routes(rt, store):
@@ -28,89 +32,108 @@ def register_routes(rt, store):
 
         def prize_row(prize):
             actions = (
-                [Small("Awarded", cls="tertiary-container")]
+                [Small("Awarded")]
                 if prize["drawn"]
                 else [
                     Form(
-                        Button("Draw", type="submit"),
+                        Button("Draw"),
                         action=f"/events/{event_id}/draws/{prize['id']}",
                         method="post",
                     ),
-                    Form(
-                        Button("Remove", type="submit", cls="error"),
-                        action=f"/events/{event_id}/prizes/{prize['id']}/remove",
-                        method="post",
+                    Button(
+                        "Remove",
+                        type="button",
+                        cls=ButtonT.destructive,
+                        data_confirm=f"Remove {prize['prize_name']} from this event?",
+                        data_confirm_action=f"/events/{event_id}/prizes/{prize['id']}/remove",
+                        onclick="confirmDelete(this)",
                     ),
                 ]
             )
-            edit_form = (
+            edit_fields = (
                 []
                 if prize["drawn"]
                 else [
-                    Details(
-                        Summary("Edit"),
-                        Form(
-                            Input(
-                                name="name",
-                                value=prize["prize_name"],
-                                required=True,
-                                aria_label="Prize name",
-                                cls="s12 m5 l5",
-                            ),
-                            Input(
-                                name="sponsor",
-                                value=prize["sponsor"],
-                                aria_label="Prize sponsor",
-                                cls="s12 m5 l5",
-                            ),
-                            Button("Save", type="submit", cls="s12 m2 l2 primary"),
-                            action=f"/events/{event_id}/prizes/{prize['id']}/edit",
-                            method="post",
-                            cls="grid",
+                    Form(
+                        Input(
+                            name="name",
+                            value=prize["prize_name"],
+                            required=True,
+                            aria_label="Prize name",
                         ),
+                        Input(
+                            name="sponsor",
+                            value=prize["sponsor"],
+                            aria_label="Prize sponsor",
+                        ),
+                        Div(
+                            Button("Save", cls=ButtonT.primary),
+                            Button(
+                                "Cancel",
+                                type="button",
+                                onclick="cancelEdit(this)",
+                                cls=ButtonT.secondary,
+                            ),
+                            cls="cluster",
+                        ),
+                        action=f"/events/{event_id}/prizes/{prize['id']}/edit",
+                        method="post",
+                        hidden=True,
+                        data_write="1",
+                        cls="record-edit",
+                    )
+                ]
+            )
+            edit_button = (
+                []
+                if prize["drawn"]
+                else [
+                    Button(
+                        "Edit",
+                        type="button",
+                        onclick="startEdit(this)",
+                        data_read="1",
+                        cls=ButtonT.secondary,
                     )
                 ]
             )
             return Li(
                 Div(
-                    Strong(prize["prize_name"]),
-                    Small(prize["sponsor"] or "No sponsor listed"),
-                    cls="vertical",
+                    Div(
+                        Strong(prize["prize_name"], data_read="1"),
+                        Small(
+                            prize["sponsor"] or "No sponsor listed",
+                            data_read="1",
+                        ),
+                        *edit_fields,
+                        cls="record-main",
+                    ),
+                    Div(*actions, *edit_button, cls="record-actions"),
+                    cls="record",
                 ),
-                Div(*actions, cls="horizontal"),
-                *edit_form,
+                data_search=f"{prize['prize_name']} {prize['sponsor'] or ''}".lower(),
             )
 
-        message = status_message(status)
         return document(
             f"FastPrize | {event['name']} | Prizes",
-            Div(
-                Div("AWARDS", cls="upper small-text secondary-text"),
-                H1("Prizes", cls="small"),
-                P(f"{available_count} available | {len(prizes)} total"),
-                cls="vertical",
-            ),
-            P(message, cls="tertiary-container padding") if message else "",
+            page_header("Awards", "Prizes"),
+            status_banner(status_message(status)),
             Section(
+                stat_card(available_count, "available"),
+                stat_card(len(prizes), "total"),
+                search_card("prize-roster", "Search prizes"),
+                cls="stat-row",
+            ),
+            Card(
                 Form(
-                    Input(
-                        name="name",
-                        placeholder="Prize name",
-                        required=True,
-                        cls="s12 m5 l5",
-                    ),
-                    Input(
-                        name="sponsor",
-                        placeholder="Sponsor (optional)",
-                        cls="s12 m5 l5",
-                    ),
-                    Button("Add prize", type="submit", cls="s12 m2 l2 primary"),
+                    Input(name="name", placeholder="Prize name", required=True),
+                    Input(name="sponsor", placeholder="Sponsor (optional)"),
+                    Button("Add prize", cls=ButtonT.primary),
                     action=f"/events/{event_id}/prizes",
                     method="post",
-                    cls="grid",
+                    cls="form-row",
                 ),
-                record_list(prizes, "No prizes yet.", prize_row),
-                cls="vertical",
+                record_list(prizes, "No prizes yet.", prize_row, list_id="prize-roster"),
             ),
             event_id=event_id,
             event_name=event["name"],

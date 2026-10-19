@@ -1,5 +1,4 @@
 from fasthtml.common import (
-    H1,
     Div,
     HTTPException,
     P,
@@ -13,7 +12,7 @@ from fasthtml.common import (
     Tr,
 )
 
-from fastprize.ui import document
+from fastprize.ui import document, page_header
 
 
 def register_routes(rt, store):
@@ -25,30 +24,41 @@ def register_routes(rt, store):
         history = store.draw_history(event_id)
         rows = [
             Tr(
-                Td(Strong(draw["entrant_name"]), Small(draw["organization"])),
-                Td(Strong(draw["prize_name"]), Small(draw["sponsor"])),
+                Td(
+                    Div(
+                        Strong(draw["entrant_name"]),
+                        Small(draw["organization"]) if draw["organization"] else "",
+                        cls="record-main",
+                    )
+                ),
+                Td(
+                    Div(
+                        Strong(draw["prize_name"]),
+                        Small(draw["sponsor"]) if draw["sponsor"] else "",
+                        cls="record-main",
+                    )
+                ),
                 Td(draw["created_at"].replace("T", " ")[:16]),
             )
             for draw in history
         ]
-        return document(
-            f"FastPrize | {event['name']} | Draw history",
-            Div(
-                Div("COMPLETED DRAWS", cls="upper small-text secondary-text"),
-                H1("Draw history", cls="small"),
-                P(f"{len(history)} completed"),
-                cls="vertical",
-            ),
-            Div(
-                Table(
-                    Thead(Tr(Th("Winner"), Th("Prize"), Th("Time"))),
-                    Tbody(*rows),
-                    cls="border stripes",
-                ),
-                cls="responsive scroll",
+        history_table = (
+            Table(
+                Thead(Tr(Th("Winner"), Th("Prize"), Th("Time"))),
+                Tbody(*rows),
+                cls="uk-table uk-table-divider",
             )
             if history
-            else P("Completed draws will appear here.", cls="surface-variant padding"),
+            else P("Completed draws will appear here.", cls="empty-note")
+        )
+        return document(
+            f"FastPrize | {event['name']} | Draw history",
+            page_header(
+                "Completed draws",
+                "Draw history",
+                f"{len(history)} completed",
+            ),
+            history_table,
             event_id=event_id,
             event_name=event["name"],
             active_link="history",

@@ -8,6 +8,9 @@ authors = [
 ]
 requires-python = ">=3.14"
 dependencies = [
+    "apsw>=3.54.1.0",
+    "fastlite>=0.2.4",
+    "monsterui>=1.0.47",
     "python-fasthtml>=0.14.13",
 ]
 

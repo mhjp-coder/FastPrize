@@ -15,21 +15,21 @@ def test_selected_event_cookie_persists_and_updates(tmp_path):
     first_id = store.create_event("First event")
     second_id = store.create_event("Second event")
 
-    assert f'href="/events/{first_id}/import"' not in client.get("/").text
+    assert f'href="/events/{first_id}/entrants"' not in client.get("/").text
 
     first_selection = client.get(f"/events/{first_id}")
     assert first_selection.cookies.get("fastprize_event_id") == str(first_id)
     first_home = client.get("/")
     assert "First event" in first_home.text
-    assert f'href="/events/{first_id}/import"' in first_home.text
-    assert f'href="/events/{second_id}/import"' not in first_home.text
+    assert f'href="/events/{first_id}/entrants"' in first_home.text
+    assert f'href="/events/{second_id}/entrants"' not in first_home.text
 
     second_selection = client.get(f"/events/{second_id}")
     assert second_selection.cookies.get("fastprize_event_id") == str(second_id)
     second_home = client.get("/")
     assert "Second event" in second_home.text
-    assert f'href="/events/{second_id}/import"' in second_home.text
-    assert f'href="/events/{first_id}/import"' not in second_home.text
+    assert f'href="/events/{second_id}/entrants"' in second_home.text
+    assert f'href="/events/{first_id}/entrants"' not in second_home.text
 
     old_projector_poll = client.get(f"/events/{first_id}/display/latest")
     assert old_projector_poll.status_code == 200
@@ -51,9 +51,17 @@ def test_event_workflow_and_live_display(tmp_path):
     assert "No folded slips." in home.text
     assert 'href="/events"' in home.text
     assert "Create event" not in home.text
-    assert "beercss@5.0.3/dist/cdn/beer.min.css" in home.text
-    assert "beercss@5.0.3/dist/cdn/beer.min.js" in home.text
-    assert '<body class="light compact">' in home.text
+    assert "/assets/vendor/franken.css" in home.text
+    assert "/assets/vendor/tailwind.js" in home.text
+    assert "/assets/app.css" in home.text
+    assert "beercss" not in home.text
+    assert 'class="bg-background text-foreground"' in home.text
+    assert "uk-theme-slate" in home.text
+    assert "uk-theme-blue" in home.text
+    assert "uk-theme-green" in home.text
+    assert "uk-theme-rose" in home.text
+    assert "uk-theme-yellow" in home.text
+    assert "uk-theme-zinc" not in home.text
     assert "<style" not in home.text.lower()
     assert "class-=" not in home.text
 
@@ -61,7 +69,7 @@ def test_event_workflow_and_live_display(tmp_path):
     assert events_page.status_code == 200
     assert "Create event" in events_page.text
     assert "Open event workspace" not in events_page.text
-    assert 'href="/events/1/import"' not in events_page.text
+    assert 'href="/events/1/entrants"' not in events_page.text
 
     workspace = client.post("/events", data={"name": "Launch day"})
     assert workspace.status_code == 200
@@ -69,11 +77,11 @@ def test_event_workflow_and_live_display(tmp_path):
     event_management_page = client.get("/events").text
     assert "Open event workspace" not in event_management_page
     assert "Launch day" in event_management_page
-    assert "responsive center-align" in event_management_page
+    assert "Draw" in event_management_page
+    assert "Live display" in event_management_page
     event_id = store.list_events()[0]["id"]
     page_paths = {
         "events": f"/events/{event_id}",
-        "import": f"/events/{event_id}/import",
         "entrants": f"/events/{event_id}/entrants",
         "prizes": f"/events/{event_id}/prizes",
         "draw": f"/events/{event_id}/draw",
@@ -88,14 +96,21 @@ def test_event_workflow_and_live_display(tmp_path):
         assert "Launch day" in page.text
         assert f'href="{path}"' in selected_home
     assert 'href="/"' in workspace.text
-    import_page = client.get(page_paths["import"])
-    assert "Entrants CSV" in import_page.text
-    assert "Prizes CSV" in import_page.text
-    assert "Import selected files" in import_page.text
-    assert import_page.text.count('type="file"') == 2
-    assert import_page.text.count('type="button"') == 2
-    assert import_page.text.count("attach_file") == 2
-    assert import_page.text.count('type="submit"') == 1
+    manage_page = client.get(page_paths["events"])
+    assert "Entrants CSV" in manage_page.text
+    assert "Prizes CSV" in manage_page.text
+    assert "Import selected files" in manage_page.text
+    assert "Data management" in manage_page.text
+    assert manage_page.text.index("Import selected files") < manage_page.text.index(
+        "Data management"
+    )
+    assert manage_page.text.count('type="file"') == 2
+    assert manage_page.text.count('icon="paperclip"') == 2
+    assert 'id="confirm-delete"' in manage_page.text
+    assert f'href="/events/{event_id}/import"' not in selected_home
+    old_import = client.get(f"/events/{event_id}/import")
+    assert old_import.status_code == 200
+    assert "Import selected files" in old_import.text
 
     imported = client.post(
         f"/events/{event_id}/entrants/import",
@@ -252,6 +267,29 @@ def test_operator_can_edit_and_remove_entrants_and_prizes(tmp_path):
     assert store.prizes(event_id) == []
 
 
+def test_home_desk_status_reports_missing_entrants_or_prizes(tmp_path):
+    app, store = create_app(tmp_path / "desk.sqlite3")
+    client = _test_client(app)
+    event_id = store.create_event("Awards")
+    client.get(f"/events/{event_id}")
+
+    empty_home = client.get("/")
+    assert "This event has no entrants or prizes yet." in empty_home.text
+
+    store.add_entrant(event_id, "Ada Lovelace", "Engine Co")
+    entrants_only = client.get("/")
+    assert "This event has no prizes yet." in entrants_only.text
+    assert "Your draw desk is ready." not in entrants_only.text
+
+    store.add_prize(event_id, "Laptop", "Northwind")
+    ready_home = client.get("/")
+    assert "Your draw desk is ready." in ready_home.text
+
+    store.remove_entrant(event_id, store.entrants(event_id)[0]["id"])
+    prizes_only = client.get("/")
+    assert "This event has no entrants yet." in prizes_only.text
+
+
 def test_operator_can_clear_all_entrants_and_prizes(tmp_path):
     app, store = create_app(tmp_path / "clear.sqlite3")
     client = _test_client(app)
@@ -277,3 +315,28 @@ def test_operator_can_clear_all_entrants_and_prizes(tmp_path):
     assert "Cleared all entrants and prizes." in reset_page.text
     assert store.entrants(event_id) == []
     assert store.prizes(event_id) == []
+
+
+def test_operator_can_delete_an_event(tmp_path):
+    app, store = create_app(tmp_path / "delete-event.sqlite3")
+    client = _test_client(app)
+    kept_id = store.create_event("Keep")
+    event_id = store.create_event("Awards")
+    store.add_entrant(event_id, "Ada Lovelace", "Engine Co")
+    store.add_prize(event_id, "Laptop", "Northwind")
+
+    manage_page = client.get(f"/events/{event_id}")
+    assert "Live Display" not in manage_page.text
+    assert f'data-confirm-action="/events/{event_id}/delete"' in manage_page.text
+    assert "Delete event" in manage_page.text
+
+    events_page = client.post(f"/events/{event_id}/delete")
+    assert events_page.status_code == 200
+    assert "Awards" not in events_page.text
+    assert "Keep" in events_page.text
+    assert store.get_event(event_id) is None
+    assert store.entrants(event_id) == []
+    assert store.prizes(event_id) == []
+    assert client.cli.cookies.get("fastprize_event_id") is None
+    assert "Awards" not in client.get("/").text
+    assert store.get_event(kept_id) is not None

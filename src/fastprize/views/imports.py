@@ -1,105 +1,109 @@
 import json
 
 from fasthtml.common import (
-    H1,
-    H2,
-    Button,
+    Details,
     Div,
-    Fieldset,
     Form,
-    HTTPException,
-    I,
     Input,
-    Legend,
     P,
+    RedirectResponse,
     Request,
-    Small,
     Span,
+    Strong,
+    Summary,
 )
+from monsterui.franken import Button, ButtonT, Card, H2, H3, UkIcon
 
-from fastprize.ui import document, redirect_event, status_message
+from fastprize.ui import redirect_event
+
+
+def _column_info(title: str, required: str, optional: str):
+    return Details(
+        Summary(
+            UkIcon("info"),
+            aria_label=f"{title} CSV columns",
+            cls="info-trigger",
+        ),
+        Div(
+            P(Strong("Required"), f" {required}"),
+            P(Strong("Optional"), f" {optional}"),
+            cls="info-panel",
+        ),
+        cls="info-tip",
+    )
+
+
+def _file_picker(label: str, name: str, hint: str, required: str, optional: str):
+    return Div(
+        Div(
+            H3(label),
+            _column_info(label, required, optional),
+            cls="cluster",
+        ),
+        P(hint),
+        Button(
+            UkIcon("paperclip"),
+            Span(f"{label} CSV"),
+            type="button",
+            onclick="this.nextElementSibling.click()",
+            cls=ButtonT.secondary,
+        ),
+        Input(
+            type="file",
+            name=name,
+            accept=".csv,text/csv",
+            hidden=True,
+            onchange="this.previousElementSibling.querySelector('span').textContent = this.files[0].name",
+        ),
+        cls="import-field",
+    )
+
+
+def import_form(event_id: int):
+    return Card(
+        H2("Import"),
+        P("Load entrants and prizes from CSV files."),
+        Form(
+            Div(
+                _file_picker(
+                    "Entrants",
+                    "entrants_file",
+                    "Import names and organizations.",
+                    "name",
+                    "organization",
+                ),
+                _file_picker(
+                    "Prizes",
+                    "prizes_file",
+                    "Import prize names and sponsors.",
+                    "prize_name",
+                    "sponsor",
+                ),
+                cls="import-fields",
+            ),
+            Button("Import selected files", cls=ButtonT.primary),
+            action=f"/events/{event_id}/import",
+            method="post",
+            enctype="multipart/form-data",
+            cls="stack",
+        ),
+    )
 
 
 def register_routes(rt, store):
-    @rt("/events/{event_id}/import", methods=["GET", "POST"])
-    async def import_page(event_id: int, req: Request, status: str = ""):
-        event = store.get_event(event_id)
-        if event is None:
-            raise HTTPException(status_code=404)
-        if req.method == "POST":
-            form = await req.form()
-            return await process_uploads(
-                event_id,
-                {
-                    "entrants": form.get("entrants_file"),
-                    "prizes": form.get("prizes_file"),
-                },
-            )
-        message = status_message(status)
-        return document(
-            f"FastPrize | {event['name']} | Import",
-            Div(
-                Div("EVENT DATA", cls="upper small-text secondary-text"),
-                H1("Import CSV", cls="small"),
-                P(f"Load entrants and prizes into {event['name']}."),
-                cls="vertical",
-            ),
-            P(message, cls="tertiary-container padding") if message else "",
-            Form(
-                Fieldset(
-                    Legend("Select CSV files"),
-                    Div(
-                        Div(
-                            H2("Entrants", cls="small"),
-                            Small("Import names and organizations."),
-                            Button(
-                                I("attach_file"),
-                                Span("Entrants CSV"),
-                                type="button",
-                                onclick="this.nextElementSibling.click()",
-                                cls="secondary",
-                            ),
-                            Input(
-                                type="file",
-                                name="entrants_file",
-                                accept=".csv,text/csv",
-                                hidden=True,
-                                onchange="this.previousElementSibling.querySelector('span').textContent = this.files[0].name",
-                            ),
-                            cls="s12 m6 l6 vertical",
-                        ),
-                        Div(
-                            H2("Prizes", cls="small"),
-                            Small("Import prize names and sponsors."),
-                            Button(
-                                I("attach_file"),
-                                Span("Prizes CSV"),
-                                type="button",
-                                onclick="this.nextElementSibling.click()",
-                                cls="secondary",
-                            ),
-                            Input(
-                                type="file",
-                                name="prizes_file",
-                                accept=".csv,text/csv",
-                                hidden=True,
-                                onchange="this.previousElementSibling.querySelector('span').textContent = this.files[0].name",
-                            ),
-                            cls="s12 m6 l6 vertical",
-                        ),
-                        cls="grid",
-                    ),
-                    Button("Import selected files", type="submit", cls="primary"),
-                    cls="vertical",
-                ),
-                action=f"/events/{event_id}/import",
-                method="post",
-                enctype="multipart/form-data",
-                cls="vertical",
-            ),
-            event_id=event_id,
-            event_name=event["name"],
-            active_link="import",
+    @rt("/events/{event_id}/import", methods=["GET"])
+    def import_page(event_id: int):
+        return RedirectResponse(f"/events/{event_id}", status_code=303)
+
+    @rt("/events/{event_id}/import", methods=["POST"])
+    async def import_files(event_id: int, req: Request):
+        form = await req.form()
+        return await process_uploads(
+            event_id,
+            {
+                "entrants": form.get("entrants_file"),
+                "prizes": form.get("prizes_file"),
+            },
         )
 
     async def process_uploads(event_id: int, uploads):
@@ -110,10 +114,10 @@ def register_routes(rt, store):
             try:
                 contents[kind] = (await upload.read()).decode("utf-8-sig")
             except UnicodeDecodeError:
-                return redirect_event(event_id, "invalid-encoding", "import")
+                return redirect_event(event_id, "invalid-encoding")
 
         if not contents:
-            return redirect_event(event_id, "no-file", "import")
+            return redirect_event(event_id, "no-file")
 
         reports = {}
         for kind, content in contents.items():
@@ -140,7 +144,7 @@ def register_routes(rt, store):
                 },
                 separators=(",", ":"),
             )
-        return redirect_event(event_id, status, "import")
+        return redirect_event(event_id, status)
 
     async def import_csv(event_id: int, req: Request, kind: str):
         form = await req.form()

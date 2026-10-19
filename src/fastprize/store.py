@@ -117,6 +117,12 @@ class PrizeDrawStore:
     def get_event(self, event_id: int) -> dict | None:
         return self._one(self.db.t.events, "id = ?", (event_id,))
 
+    def delete_event(self, event_id: int) -> bool:
+        if self.get_event(event_id) is None:
+            return False
+        self.db.t.events.delete(event_id)
+        return True
+
     def set_remove_winners(self, event_id: int, remove_winners: bool) -> None:
         self.db.t.events.update({"id": event_id, "remove_winners": int(remove_winners)})
 

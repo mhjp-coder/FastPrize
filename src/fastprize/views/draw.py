@@ -1,62 +1,75 @@
 from fasthtml.common import (
-    H1,
-    H2,
     A,
-    Button,
     Div,
     Form,
     HTTPException,
     JSONResponse,
     Li,
-    P,
     RedirectResponse,
-    Script,
     Section,
+    Script,
     Small,
     Strong,
     Ul,
 )
+from monsterui.franken import Button, ButtonT, Card
 
 from fastprize.ui import (
     document,
     draw_preview_modal,
+    page_header,
     redirect_event,
+    search_card,
+    stat_card,
+    status_banner,
     status_message,
     winner_fragment,
 )
 
 POLL_SCRIPT = """
 let current = document.getElementById('live-result');
+const banner = document.getElementById('live-banner');
 function resultNode(draw) {
     const node = document.createElement('div');
     node.id = 'live-result';
+    node.className = 'live-result';
     node.dataset.drawId = draw.id ? String(draw.id) : '';
     node.dataset.resultVersion = draw.created_at || '';
     if (!draw.id) {
         const idle = document.createElement('p');
-        idle.className = 'large-text center-align';
+        idle.className = 'live-idle';
         idle.textContent = 'The next name could be yours.';
         node.append(idle);
         return node;
     }
-    const eyebrow = document.createElement('div');
-    eyebrow.className = 'upper small-text tertiary-text center-align';
-    eyebrow.textContent = 'The winner is';
+    const person = document.createElement('div');
+    person.className = 'live-person';
     const name = document.createElement('h1');
+    name.className = 'live-name';
     name.textContent = draw.entrant_name;
-    const organization = document.createElement('p');
-    organization.className = 'medium-text center-align';
-    organization.textContent = draw.organization || '';
+    person.append(name);
+    if (draw.organization) {
+        const from = document.createElement('p');
+        from.className = 'live-join';
+        from.textContent = 'from';
+        const organization = document.createElement('p');
+        organization.className = 'live-org';
+        organization.textContent = draw.organization;
+        person.append(from, organization);
+    }
     const award = document.createElement('div');
-    award.className = 'horizontal center-align';
-    const prize = document.createElement('strong');
+    award.className = 'live-award';
+    const prize = document.createElement('p');
+    prize.className = 'live-prize';
     prize.textContent = draw.prize_name;
-    const from = document.createElement('span');
-    from.textContent = 'from';
-    const sponsor = document.createElement('strong');
+    const sponsored = document.createElement('p');
+    sponsored.className = 'live-join';
+    sponsored.textContent = 'sponsored by';
+    const sponsor = document.createElement('p');
+    sponsor.className = 'live-sponsor';
     sponsor.textContent = draw.sponsor || 'our conference sponsors';
-    award.append(prize, from, sponsor);
-    node.append(eyebrow, name, organization, award);
+    award.append(prize, sponsored, sponsor);
+    node.append(person, award);
     return node;
 }
 async function refreshResult() {
@@ -64,6 +77,8 @@ async function refreshResult() {
     const response = await fetch(location.pathname + '/latest', {cache: 'no-store'});
     if (!response.ok) return;
     const draw = await response.json();
+    banner.hidden = !draw.id;
+    banner.textContent = draw.id ? 'The winner is' : '';
     const next = resultNode(draw);
     if (next.dataset.resultVersion !== current.dataset.resultVersion) {
       current.replaceWith(next);
@@ -105,42 +120,47 @@ def register_routes(rt, store):
         prize_rows = [
             Li(
                 Div(
-                    Strong(prize["prize_name"]),
-                    Small(prize["sponsor"] or "No sponsor listed"),
-                    cls="vertical",
+                    Div(
+                        Strong(prize["prize_name"]),
+                        Small(prize["sponsor"] or "No sponsor listed"),
+                        cls="record-main",
+                    ),
+                    Form(
+                        Button("Select winner", cls=ButtonT.primary),
+                        action=f"/events/{event_id}/draws/{prize['id']}/preview",
+                        method="post",
+                    ),
+                    cls="record",
                 ),
-                Form(
-                    Button("Select winner", type="submit", cls="primary"),
-                    action=f"/events/{event_id}/draws/{prize['id']}/preview",
-                    method="post",
-                ),
+                data_search=f"{prize['prize_name']} {prize['sponsor'] or ''}".lower(),
             )
             for prize in available_prizes
         ]
         message = status_message(status)
         return document(
             f"FastPrize | {event['name']} | Draw",
-            Div(
-                Div("LIVE DRAW", cls="upper small-text secondary-text"),
-                H1("Draw a prize", cls="small"),
-                P(f"{eligible_count} eligible entrants"),
-                cls="vertical",
-            ),
-            P(message, cls="tertiary-container padding") if message else "",
-            preview_modal if preview_modal else "",
+            page_header("Live draw", "Draw a prize"),
+            status_banner(message),
             Section(
-                H2("Available prizes", cls="small"),
-                Ul(*prize_rows, cls="border no-space")
+                stat_card(eligible_count, "eligible entrants"),
+                search_card("prize-list", "Search prizes"),
+                cls="stat-row",
+            ),
+            preview_modal if preview_modal else "",
+            Card(
+                Ul(*prize_rows, id="prize-list", cls="uk-list uk-list-divider")
                 if prize_rows
-                else P(
-                    "No prizes are available to draw.", cls="surface-variant padding"
+                else Div(
+                    "No prizes are available to draw.",
+                    cls="empty-note",
                 ),
-                cls="vertical",
             ),
             A(
-                "Open projector display",
+                "Live Display",
                 href=f"/events/{event_id}/display",
-                cls="tertiary",
+                target="_blank",
+                rel="noopener",
+                cls="uk-btn uk-btn-ghost",
             ),
             event_id=event_id,
             event_name=event["name"],
@@ -202,11 +222,13 @@ def register_routes(rt, store):
         return document(
             f"{event['name']} | Live draw",
             Div(
-                Div("LIVE PRIZE DRAW", cls="upper small-text secondary-text"),
-                winner_fragment(current_result),
-                cls="responsive center-align",
+                "The winner is" if current_result else "",
+                id="live-banner",
+                cls="live-kicker live-banner",
+                hidden=None if current_result else True,
             ),
-            P("FastPrize | Live draw", cls="small-text"),
+            winner_fragment(current_result),
+            Div("FastPrize | Live draw", cls="live-footer"),
             Script(POLL_SCRIPT),
             screen=True,
         )

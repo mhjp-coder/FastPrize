@@ -1,21 +1,26 @@
 from fasthtml.common import (
-    H1,
-    Button,
-    Details,
     Div,
     Form,
     HTTPException,
-    Input,
     Li,
-    P,
     Section,
     Small,
     Span,
     Strong,
-    Summary,
 )
+from monsterui.franken import Button as ThemeButton
+from monsterui.franken import ButtonT, Card, Input
 
-from fastprize.ui import document, record_list, redirect_event, status_message
+from fastprize.ui import (
+    document,
+    page_header,
+    record_list,
+    redirect_event,
+    search_field,
+    stat_card,
+    status_banner,
+    status_message,
+)
 
 
 def register_routes(rt, store):
@@ -30,76 +35,92 @@ def register_routes(rt, store):
         def entrant_row(entrant):
             return Li(
                 Div(
-                    Strong(entrant["name"]),
-                    Small(entrant["organization"] or "No organization listed"),
-                    cls="vertical",
-                ),
-                Div(
-                    Span(
-                        "Eligible" if entrant["eligible"] else "Winner",
-                        cls="secondary-container",
-                    ),
-                    Form(
-                        Button("Remove", type="submit", cls="error"),
-                        action=f"/events/{event_id}/entrants/{entrant['id']}/remove",
-                        method="post",
-                    ),
-                    cls="horizontal",
-                ),
-                Details(
-                    Summary("Edit"),
-                    Form(
-                        Input(
-                            name="name",
-                            value=entrant["name"],
-                            required=True,
-                            aria_label="Entrant name",
-                            cls="s12 m5 l5",
+                    Div(
+                        Strong(entrant["name"], data_read="1"),
+                        Small(
+                            entrant["organization"] or "No organization listed",
+                            data_read="1",
                         ),
-                        Input(
-                            name="organization",
-                            value=entrant["organization"],
-                            aria_label="Organization",
-                            cls="s12 m5 l5",
+                        Form(
+                            Input(
+                                name="name",
+                                value=entrant["name"],
+                                required=True,
+                                aria_label="Entrant name",
+                            ),
+                            Input(
+                                name="organization",
+                                value=entrant["organization"],
+                                aria_label="Organization",
+                            ),
+                            Div(
+                                ThemeButton("Save", cls=ButtonT.primary),
+                                ThemeButton(
+                                    "Cancel",
+                                    type="button",
+                                    onclick="cancelEdit(this)",
+                                    cls=ButtonT.secondary,
+                                ),
+                                cls="cluster",
+                            ),
+                            action=f"/events/{event_id}/entrants/{entrant['id']}/edit",
+                            method="post",
+                            hidden=True,
+                            data_write="1",
+                            cls="record-edit",
                         ),
-                        Button("Save", type="submit", cls="s12 m2 l2 primary"),
-                        action=f"/events/{event_id}/entrants/{entrant['id']}/edit",
-                        method="post",
-                        cls="grid",
+                        cls="record-main",
                     ),
+                    Div(
+                        Span("Eligible" if entrant["eligible"] else "Winner"),
+                        ThemeButton(
+                            "Remove",
+                            type="button",
+                            cls=ButtonT.destructive,
+                            data_confirm=f"Remove {entrant['name']} from this event?",
+                            data_confirm_action=f"/events/{event_id}/entrants/{entrant['id']}/remove",
+                            onclick="confirmDelete(this)",
+                        ),
+                        ThemeButton(
+                            "Edit",
+                            type="button",
+                            onclick="startEdit(this)",
+                            data_read="1",
+                            cls=ButtonT.secondary,
+                        ),
+                        cls="record-actions",
+                    ),
+                    cls="record",
                 ),
+                data_search=f"{entrant['name']} {entrant['organization'] or ''}".lower(),
             )
 
-        message = status_message(status)
         return document(
             f"FastPrize | {event['name']} | Entrants",
-            Div(
-                Div("EVENT ROSTER", cls="upper small-text secondary-text"),
-                H1("Entrants", cls="small"),
-                P(f"{len(entrants)} total | {eligible_count} eligible"),
-                cls="vertical",
-            ),
-            P(message, cls="tertiary-container padding") if message else "",
+            page_header("Event roster", "Entrants"),
+            status_banner(status_message(status)),
             Section(
-                Form(
-                    Input(
-                        name="name",
-                        placeholder="Full name",
-                        required=True,
-                        cls="s12 m5 l5",
+                stat_card(len(entrants), "total"),
+                stat_card(eligible_count, "eligible"),
+                Card(
+                    Form(
+                        Input(name="name", placeholder="Full name", required=True),
+                        Input(
+                            name="organization",
+                            placeholder="Organization (optional)",
+                        ),
+                        ThemeButton("Add entrant", cls=ButtonT.primary),
+                        action=f"/events/{event_id}/entrants",
+                        method="post",
+                        cls="add-entrant-form",
                     ),
-                    Input(
-                        name="organization",
-                        placeholder="Organization (optional)",
-                        cls="s12 m5 l5",
-                    ),
-                    Button("Add entrant", type="submit", cls="s12 m2 l2 primary"),
-                    action=f"/events/{event_id}/entrants",
-                    method="post",
-                    cls="grid",
+                    body_cls="add-card",
                 ),
-                record_list(entrants, "No entrants yet.", entrant_row),
-                cls="vertical",
+                cls="stat-row roster-row",
+            ),
+            Card(
+                search_field("entrant-list", "Search entrants"),
+                record_list(entrants, "No entrants yet.", entrant_row, list_id="entrant-list"),
             ),
             event_id=event_id,
             event_name=event["name"],
