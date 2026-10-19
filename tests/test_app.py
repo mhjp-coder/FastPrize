@@ -1,11 +1,31 @@
 from fasthtml.common import Client
 
 from fastprize.app import create_app
+from fastprize.auth import hash_password
+from fastprize.ui import TECHNOLOGY_QUOTES, winner_fragment
 
 
-def _test_client(app):
+def _test_client(app, *, login: bool = True):
     client = Client(app)
     client.cli.follow_redirects = True
+    client.cli.headers.update({"Origin": "http://testserver"})
+    if not login:
+        return client
+    store = app.state.store
+    if store.get_admin_by_email("test-admin@example.test") is None:
+        store.create_admin(
+            "test-admin@example.test", hash_password("test-password-123")
+        )
+    login_page = client.get("/login").text
+    csrf_token = login_page.split('name="csrf" value="', 1)[1].split('"', 1)[0]
+    client.post(
+        "/login",
+        data={
+            "email": "test-admin@example.test",
+            "password": "test-password-123",
+            "csrf": csrf_token,
+        },
+    )
     return client
 
 
@@ -344,3 +364,70 @@ def test_operator_can_delete_an_event(tmp_path):
     assert client.cli.cookies.get("fastprize_event_id") is None
     assert "Awards" not in client.get("/").text
     assert store.get_event(kept_id) is not None
+
+
+def test_management_requires_sign_in_and_projector_stays_public(tmp_path):
+    app, store = create_app(tmp_path / "auth-public.sqlite3")
+    client = _test_client(app, login=False)
+    event_id = store.create_event("Awards")
+
+    home = client.get("/")
+    assert "Admin setup required" in home.text
+    assert "uv run fastprize-admin create you@example.com" in home.text
+    assert 'href="/events"' not in home.text
+
+    display = client.get(f"/events/{event_id}/display")
+    assert display.status_code == 200
+    assert "Live draw" in display.text
+    assert client.get(f"/events/{event_id}/display/latest").status_code == 200
+
+
+def test_live_display_replaces_expired_winner_with_stable_quote():
+    from datetime import UTC, datetime, timedelta
+
+    from fasthtml.common import to_xml
+
+    assert TECHNOLOGY_QUOTES
+    now = datetime.now(UTC)
+    draw = {
+        "id": 42,
+        "entrant_name": "Ada Lovelace",
+        "organization": "Engine Co",
+        "prize_name": "Laptop",
+        "sponsor": "Northwind",
+        "created_at": (now - timedelta(minutes=3, seconds=10)).isoformat(),
+    }
+    first = to_xml(winner_fragment(draw))
+    second = to_xml(winner_fragment(draw))
+    later = to_xml(
+        winner_fragment(
+            {
+                **draw,
+                "created_at": (now - timedelta(minutes=6, seconds=10)).isoformat(),
+            }
+        )
+    )
+    selected = next(quote for quote in TECHNOLOGY_QUOTES if quote in first)
+    assert f'"{selected}"' in first
+    assert "live-quote" in first
+    assert 'data-display-state="quote"' in first
+    assert "Ada Lovelace" not in first
+    assert first == second
+    assert first != later
+
+
+def test_admin_can_sign_in_and_add_another_account(tmp_path):
+    app, store = create_app(tmp_path / "auth-accounts.sqlite3")
+    client = _test_client(app)
+    accounts = client.get("/admin/accounts")
+    assert accounts.status_code == 200
+    assert "test-admin@example.test" in accounts.text
+    assert 'id="admin-counts"' in accounts.text
+    created = client.post(
+        "/admin/accounts",
+        data={"email": "second@example.test", "password": "second-admin-password"},
+    )
+    assert "Admin account created." in created.text
+    assert store.get_admin_by_email("second@example.test") is not None
+    signed_out = client.post("/logout")
+    assert "Admin sign in" in signed_out.text

@@ -1,0 +1,15 @@
+button.circle[data-theme-palette="sapphire"] {
+    background: linear-gradient(135deg, #3159A6 50%, #82B1FF 50%);
+}
+
+button.circle[data-theme-palette="jade"] {
+    background: linear-gradient(135deg, #087F5B 50%, #6DD6B0 50%);
+}
+
+button.circle[data-theme-palette="coral"] {
+    background: linear-gradient(135deg, #B3261E 50%, #F28B82 50%);
+}
+
+button.circle[data-theme-palette="marigold"] {
+    background: linear-gradient(135deg, #8C5A00 50%, #FFD166 50%);
+}

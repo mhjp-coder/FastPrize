@@ -99,7 +99,7 @@ def register_routes(rt, store):
                         method="post",
                         hidden=True,
                         data_write="1",
-                        cls="record-edit",
+                        cls="record-edit prize-edit",
                     )
                 ]
             )

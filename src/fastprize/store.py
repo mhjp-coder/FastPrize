@@ -1,6 +1,7 @@
 import csv
 import io
 import json
+import os
 import secrets
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -9,6 +10,12 @@ from pathlib import Path
 
 from apsw import ConstraintError
 from fastlite import database
+
+DEFAULT_DATABASE_PATH = Path(__file__).resolve().parents[2] / "fastprize.sqlite3"
+
+
+def get_database_path() -> Path:
+    return Path(os.environ.get("FASTPRIZE_DB_PATH") or DEFAULT_DATABASE_PATH)
 
 
 @dataclass(frozen=True)
@@ -35,6 +42,21 @@ class PrizeDrawStore:
                 id INTEGER PRIMARY KEY,
                 name TEXT NOT NULL,
                 remove_winners INTEGER NOT NULL DEFAULT 1
+            )""",
+            """CREATE TABLE IF NOT EXISTS admins (
+                id INTEGER PRIMARY KEY,
+                email TEXT NOT NULL,
+                email_normalized TEXT NOT NULL UNIQUE,
+                password_hash TEXT NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                auth_version INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL
+            )""",
+            """CREATE TABLE IF NOT EXISTS admin_login_attempts (
+                subject TEXT PRIMARY KEY,
+                window_started REAL NOT NULL,
+                failures INTEGER NOT NULL,
+                blocked_until REAL NOT NULL DEFAULT 0
             )""",
             """CREATE TABLE IF NOT EXISTS entrants (
                 id INTEGER PRIMARY KEY,
@@ -124,6 +146,145 @@ class PrizeDrawStore:
 
     def get_event(self, event_id: int) -> dict | None:
         return self._one(self.db.t.events, "id = ?", (event_id,))
+
+    @staticmethod
+    def normalize_admin_email(email: str) -> str:
+        return email.strip().casefold()
+
+    def admin_count(self, enabled_only: bool = False) -> int:
+        rows = self.db.t.admins(
+            where="enabled = 1" if enabled_only else None,
+            as_cls=False,
+        )
+        return len(rows)
+
+    def get_admin(self, admin_id: int) -> dict | None:
+        return self._one(self.db.t.admins, "id = ?", (admin_id,))
+
+    def get_admin_by_email(self, email: str) -> dict | None:
+        normalized = self.normalize_admin_email(email)
+        return self._one(
+            self.db.t.admins,
+            "email_normalized = ?",
+            (normalized,),
+        )
+
+    def list_admins(self) -> list[dict]:
+        return self.db.t.admins(
+            order_by="email_normalized",
+            select="id,email,enabled,created_at",
+            as_cls=False,
+        )
+
+    def create_admin(self, email: str, password_hash: str) -> dict:
+        normalized = self.normalize_admin_email(email)
+        if not normalized or "@" not in normalized:
+            raise ValueError("A valid email address is required")
+        try:
+            return self.db.t.admins.insert(
+                {
+                    "email": email.strip(),
+                    "email_normalized": normalized,
+                    "password_hash": password_hash,
+                    "auth_version": secrets.randbits(62),
+                    "created_at": datetime.now(UTC).isoformat(timespec="seconds"),
+                }
+            )
+        except ConstraintError as error:
+            raise ValueError("An account with that email already exists") from error
+
+    def bootstrap_admin(self, email: str, password_hash: str) -> dict | None:
+        with self.db.conn:
+            if self.admin_count():
+                return None
+            return self.create_admin(email, password_hash)
+
+    def update_admin_password(self, admin_id: int, password_hash: str) -> bool:
+        admin = self.get_admin(admin_id)
+        if admin is None:
+            return False
+        self.db.t.admins.update(
+            {
+                "id": admin_id,
+                "password_hash": password_hash,
+                "auth_version": admin["auth_version"] + 1,
+            }
+        )
+        return True
+
+    def set_admin_enabled(self, admin_id: int, enabled: bool) -> bool:
+        admin = self.get_admin(admin_id)
+        if admin is None:
+            return False
+        if bool(admin["enabled"]) == enabled:
+            return True
+        with self.db.conn:
+            if not enabled and self.admin_count(enabled_only=True) <= 1:
+                return False
+            self.db.t.admins.update(
+                {
+                    "id": admin_id,
+                    "enabled": int(enabled),
+                    "auth_version": admin["auth_version"] + 1,
+                }
+            )
+        return True
+
+    def delete_admin(self, admin_id: int) -> bool:
+        with self.db.conn:
+            admin = self.get_admin(admin_id)
+            if admin is None:
+                return False
+            if admin["enabled"] and self.admin_count(enabled_only=True) <= 1:
+                return False
+            self.db.t.admins.delete(admin_id)
+        return True
+
+    def admin_login_is_limited(self, subject: str, now: float) -> bool:
+        attempt = self._one(
+            self.db.t.admin_login_attempts,
+            "subject = ?",
+            (subject,),
+        )
+        if attempt is None:
+            return False
+        if attempt["blocked_until"] > now:
+            return True
+        if attempt["window_started"] <= now - 900:
+            self.db.t.admin_login_attempts.delete(subject)
+        return False
+
+    def record_admin_login_failure(self, subject: str, now: float) -> None:
+        with self.db.conn:
+            self.db.t.admin_login_attempts.delete_where(
+                "window_started <= ?",
+                (now - 86400,),
+            )
+            attempt = self._one(
+                self.db.t.admin_login_attempts,
+                "subject = ?",
+                (subject,),
+            )
+            if attempt is None or attempt["window_started"] <= now - 900:
+                self.db.t.admin_login_attempts.insert(
+                    {
+                        "subject": subject,
+                        "window_started": now,
+                        "failures": 1,
+                    }
+                )
+                return
+            failures = attempt["failures"] + 1
+            self.db.t.admin_login_attempts.update(
+                {
+                    "subject": subject,
+                    "failures": failures,
+                    "blocked_until": now + 900 if failures >= 5 else 0,
+                }
+            )
+
+    def clear_admin_login_failures(self, subject: str) -> None:
+        self.db.t.admin_login_attempts.delete_where("subject = ?", (subject,))
 
     def delete_event(self, event_id: int) -> bool:
         if self.get_event(event_id) is None:
@@ -300,7 +461,7 @@ class PrizeDrawStore:
 
     @staticmethod
     def _imported_prize_number(values: dict[str, str]) -> int | None:
-        for key in ("prize_number", "prize #", "prize#", "prize number"):
+        for key in ("prize_number", "prize #", "prize#", "prize number", "number"):
             if key in values:
                 return PrizeDrawStore._prize_number(values[key])
         return None

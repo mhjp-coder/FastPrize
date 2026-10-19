@@ -1,4 +1,7 @@
 import json
+import random
+from datetime import UTC, datetime, timedelta
+from importlib.resources import files
 from urllib.parse import quote
 
 from fasthtml.common import (
@@ -34,6 +37,14 @@ from monsterui.franken import Button as ThemeButton
 from monsterui.franken import ButtonT, UkIcon
 
 EVENT_SELECTION_COOKIE = "fastprize_event_id"
+TECHNOLOGY_QUOTES = tuple(
+    line.strip()
+    for line in files("fastprize")
+    .joinpath("quotes.txt")
+    .read_text(encoding="utf-8")
+    .splitlines()
+    if line.strip()
+)
 
 THEMES = (
     ("uk-theme-slate", "Slate", "#64748b", True),
@@ -51,6 +62,7 @@ NAV_ITEMS = (
     ("prizes", "Prizes", "gift", "setup"),
     ("overview", "Manage", "settings", "setup"),
     ("events", "Events", "calendar", None),
+    ("accounts", "Admins", "shield", None),
 )
 
 MOBILE_KEYS = ("draw", "display", "entrants", "prizes", "overview")
@@ -183,6 +195,16 @@ function confirmDelete(button) {
     const form = document.getElementById("confirm-delete-form");
     form.action = button.dataset.confirmAction;
     form.querySelector("button").textContent = button.dataset.confirmLabel || "Remove";
+    const extra = form.querySelector("[data-extra]");
+    if (extra) extra.remove();
+    if (button.dataset.confirmField) {
+        const input = document.createElement("input");
+        input.type = "hidden";
+        input.name = button.dataset.confirmField;
+        input.value = button.dataset.confirmValue || "";
+        input.dataset.extra = "1";
+        form.append(input);
+    }
     if (!dialog.open) dialog.showModal();
 }
 """
@@ -222,6 +244,8 @@ def theme_picker():
 
 
 def _href(key: str, event_id: int | None) -> str:
+    if key == "accounts":
+        return "/admin/accounts"
     if key == "events" or event_id is None:
         return "/events"
     if key == "overview":
@@ -248,7 +272,7 @@ def _grouped_nav(event_id: int | None, active_link: str, keys: tuple[str, ...] |
     items = [
         item
         for item in NAV_ITEMS
-        if (event_id is not None or item[0] == "events")
+        if (event_id is not None or item[0] in {"events", "accounts"})
         and (keys is None or item[0] in keys)
     ]
     groups = []
@@ -279,6 +303,7 @@ def document(
     title: str,
     *content,
     screen: bool = False,
+    login_page: bool = False,
     event_id: int | None = None,
     event_name: str | None = None,
     active_link: str = "",
@@ -288,6 +313,8 @@ def document(
             Main(*content, cls="live-stage"),
             Div(theme_picker(), cls="theme-dock"),
         )
+    elif login_page:
+        body = (Main(*content, cls="login-shell"),)
     else:
         brand = A(UkIcon("dices"), Span("FastPrize"), href="/", cls="brand")
         secondary_keys = tuple(
@@ -300,6 +327,11 @@ def document(
                     P(event_name or "Choose an event", cls="nav-label"),
                     *_grouped_nav(event_id, active_link, None),
                     Div(theme_picker(), cls="sidebar-theme"),
+                    Form(
+                        ThemeButton("Sign out", type="submit", cls=ButtonT.ghost),
+                        action="/logout",
+                        method="post",
+                    ),
                     cls="sidebar",
                 ),
                 Div(
@@ -404,6 +436,19 @@ def search_card(list_id: str, label: str):
     return Card(search_field(list_id, label), body_cls="search-card")
 
 
+def live_quote(draw: dict) -> str | None:
+    drawn_at = datetime.fromisoformat(draw["created_at"])
+    if drawn_at.tzinfo is None:
+        drawn_at = drawn_at.replace(tzinfo=UTC)
+    elapsed = datetime.now(UTC) - drawn_at.astimezone(UTC)
+    quote_interval = int(elapsed // timedelta(minutes=3))
+    if quote_interval < 1:
+        return None
+    quote_order = list(TECHNOLOGY_QUOTES)
+    random.Random(str(draw["id"])).shuffle(quote_order)
+    return quote_order[(quote_interval - 1) % len(quote_order)]
+
+
 def winner_fragment(draw: dict | None):
     if draw is None:
         return Div(
@@ -412,6 +457,17 @@ def winner_fragment(draw: dict | None):
             cls="live-result",
             data_draw_id="",
             data_result_version="",
+            data_display_state="idle",
+        )
+    quote = live_quote(draw)
+    if quote:
+        return Div(
+            P(f'"{quote}"', cls="live-quote"),
+            id="live-result",
+            cls="live-result",
+            data_draw_id=str(draw["id"]),
+            data_result_version=draw["created_at"],
+            data_display_state="quote",
         )
     return Div(
         Div(
@@ -430,6 +486,7 @@ def winner_fragment(draw: dict | None):
         cls="live-result",
         data_draw_id=str(draw["id"]),
         data_result_version=draw["created_at"],
+        data_display_state="winner",
     )
 
 

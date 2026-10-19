@@ -17,6 +17,7 @@ from monsterui.franken import Button, ButtonT, Card
 from fastprize.ui import (
     document,
     draw_preview_modal,
+    live_quote,
     page_header,
     redirect_event,
     search_card,
@@ -36,12 +37,22 @@ function resultNode(draw) {
     node.dataset.drawId = draw.id ? String(draw.id) : '';
     node.dataset.resultVersion = draw.created_at || '';
     if (!draw.id) {
+        node.dataset.displayState = 'idle';
         const idle = document.createElement('p');
         idle.className = 'live-idle';
         idle.textContent = 'The next name could be yours.';
         node.append(idle);
         return node;
     }
+    if (draw.quote) {
+        node.dataset.displayState = 'quote';
+        const quote = document.createElement('p');
+        quote.className = 'live-quote';
+        quote.textContent = '"' + draw.quote + '"';
+        node.append(quote);
+        return node;
+    }
+    node.dataset.displayState = 'winner';
     const person = document.createElement('div');
     person.className = 'live-person';
     const name = document.createElement('h1');
@@ -77,10 +88,13 @@ async function refreshResult() {
     const response = await fetch(location.pathname + '/latest', {cache: 'no-store'});
     if (!response.ok) return;
     const draw = await response.json();
-    banner.hidden = !draw.id;
-    banner.textContent = draw.id ? 'The winner is' : '';
+    banner.hidden = !draw.id || Boolean(draw.quote);
+    banner.textContent = draw.id && !draw.quote ? 'The winner is' : '';
     const next = resultNode(draw);
-    if (next.dataset.resultVersion !== current.dataset.resultVersion) {
+    const changed = next.dataset.resultVersion !== current.dataset.resultVersion
+      || next.dataset.displayState !== current.dataset.displayState
+      || next.textContent !== current.textContent;
+    if (changed) {
       current.replaceWith(next);
       current = next;
     }
@@ -88,6 +102,16 @@ async function refreshResult() {
 }
 setInterval(refreshResult, 1000);
 """
+
+
+def _display_payload(record: dict | None) -> dict:
+    if not record:
+        return {}
+    payload = dict(record)
+    quote = live_quote(record)
+    if quote:
+        payload["quote"] = quote
+    return payload
 
 
 def register_routes(rt, store):
@@ -219,13 +243,14 @@ def register_routes(rt, store):
             if preview and (draw is None or preview["created_at"] >= draw["created_at"])
             else draw
         )
+        showing_winner = bool(current_result) and live_quote(current_result) is None
         return document(
             f"{event['name']} | Live draw",
             Div(
-                "The winner is" if current_result else "",
+                "The winner is" if showing_winner else "",
                 id="live-banner",
                 cls="live-kicker live-banner",
-                hidden=None if current_result else True,
+                hidden=None if showing_winner else True,
             ),
             winner_fragment(current_result),
             Div("FastPrize | Live draw", cls="live-footer"),
@@ -240,5 +265,5 @@ def register_routes(rt, store):
         preview = store.latest_preview(event_id)
         draw = store.latest_draw(event_id)
         if preview and (draw is None or preview["created_at"] >= draw["created_at"]):
-            return JSONResponse(preview)
-        return JSONResponse(draw or {})
+            return JSONResponse(_display_payload(preview))
+        return JSONResponse(_display_payload(draw))

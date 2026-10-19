@@ -236,6 +236,14 @@ body {
     align-items: end;
 }
 
+.add-prize-form {
+    grid-template-columns: 4.5rem minmax(0, 1fr);
+}
+
+.add-prize-form > :nth-child(n + 3) {
+    grid-column: 1 / -1;
+}
+
 @media (min-width: 1200px) {
     .roster-row {
         grid-template-columns: 12rem 12rem minmax(0, 1fr);
@@ -247,6 +255,10 @@ body {
 
     .add-prize-form {
         grid-template-columns: 4.5rem minmax(0, 1.2fr) minmax(0, 1fr) auto;
+    }
+
+    .add-prize-form > :nth-child(n + 3) {
+        grid-column: auto;
     }
 }
 
@@ -320,14 +332,25 @@ body {
 
 .prize-title {
     display: flex;
+    flex-flow: row nowrap;
     align-items: baseline;
     gap: 0.55rem;
 }
 
 .prize-number {
+    flex: none;
     color: hsl(var(--muted-foreground));
     font-weight: 700;
     font-variant-numeric: tabular-nums;
+}
+
+.record-edit.prize-edit {
+    display: grid;
+    grid-template-columns: 4.5rem minmax(0, 1fr);
+}
+
+.record-edit.prize-edit > :nth-child(n + 3) {
+    grid-column: 1 / -1;
 }
 
 .record-edit {
@@ -383,6 +406,36 @@ body {
     color: hsl(var(--muted-foreground));
     font-size: 0.95rem;
     letter-spacing: 0.04em;
+}
+
+.live-quote {
+    margin: 0;
+    max-width: 24ch;
+    font-size: clamp(1.5rem, 4vw, 3rem);
+    font-style: italic;
+    font-weight: 700;
+    line-height: 1.25;
+    text-align: center;
+}
+
+.login-shell {
+    display: flex;
+    min-height: 100vh;
+    align-items: center;
+    justify-content: center;
+    padding: var(--space-lg);
+}
+
+.login-shell > .uk-card {
+    width: min(100%, 28rem);
+}
+
+.login-command {
+    font-family: ui-monospace, monospace;
+}
+
+.admin-email {
+    font-weight: 700;
 }
 
 .live-result {
