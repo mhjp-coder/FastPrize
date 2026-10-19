@@ -75,9 +75,9 @@ def import_form(event_id: int):
                 _file_picker(
                     "Prizes",
                     "prizes_file",
-                    "Import prize names and sponsors.",
+                    "Import prize names, numbers, and sponsors.",
                     "prize_name",
-                    "sponsor",
+                    "sponsor, prize_number",
                 ),
                 cls="import-fields",
             ),

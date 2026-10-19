@@ -252,17 +252,21 @@ def test_operator_can_edit_and_remove_entrants_and_prizes(tmp_path):
     client.post(f"/events/{event_id}/entrants/{entrant_id}/remove")
     assert store.entrants(event_id) == []
 
-    client.post(
+    added_prize = client.post(
         f"/events/{event_id}/prizes",
-        data={"name": "Laptop", "sponsor": "Northwind"},
+        data={"name": "Laptop", "sponsor": "Northwind", "prize_number": "12"},
     )
+    assert "#12" in added_prize.text
     prize_id = store.prizes(event_id)[0]["id"]
+    assert store.prizes(event_id)[0]["prize_number"] == 12
     edited_prize = client.post(
         f"/events/{event_id}/prizes/{prize_id}/edit",
-        data={"name": "Tablet", "sponsor": "Contoso"},
+        data={"name": "Tablet", "sponsor": "Contoso", "prize_number": ""},
     )
     assert "Tablet" in edited_prize.text
+    assert "#12" not in edited_prize.text
     assert store.prizes(event_id)[0]["sponsor"] == "Contoso"
+    assert store.prizes(event_id)[0]["prize_number"] is None
     client.post(f"/events/{event_id}/prizes/{prize_id}/remove")
     assert store.prizes(event_id) == []
 

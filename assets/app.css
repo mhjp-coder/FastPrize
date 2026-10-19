@@ -228,7 +228,8 @@ body {
     justify-content: center;
 }
 
-.add-entrant-form {
+.add-entrant-form,
+.add-prize-form {
     display: grid;
     grid-template-columns: 1fr;
     gap: var(--space-sm);
@@ -242,6 +243,10 @@ body {
 
     .add-entrant-form {
         grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+    }
+
+    .add-prize-form {
+        grid-template-columns: 4.5rem minmax(0, 1.2fr) minmax(0, 1fr) auto;
     }
 }
 
@@ -311,6 +316,18 @@ body {
 
 .record-main small {
     color: hsl(var(--muted-foreground));
+}
+
+.prize-title {
+    display: flex;
+    align-items: baseline;
+    gap: 0.55rem;
+}
+
+.prize-number {
+    color: hsl(var(--muted-foreground));
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
 }
 
 .record-edit {

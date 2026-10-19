@@ -90,6 +90,7 @@ STATUS_MESSAGES = {
     "no-file": "Choose a CSV file to import.",
     "invalid-entrant": "Entrant name is required, and duplicate names are skipped.",
     "invalid-prize": "Prize name is required.",
+    "invalid-prize-number": "Prize number must be a whole number.",
     "prize-locked": "Awarded prizes cannot be changed or removed.",
     "invalid-encoding": "The CSV file must use UTF-8 text encoding.",
     "event-missing": "That event could not be found.",

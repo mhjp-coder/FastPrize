@@ -24,6 +24,33 @@ def test_csv_import_deduplicates_entrants_and_keeps_prize_copies(store):
     assert (entrants.added, entrants.duplicates, entrants.errors) == (2, 1, ())
     assert prizes.added == 2
     assert len(store.prizes(event_id)) == 2
+    assert store.prizes(event_id)[0]["prize_number"] is None
+
+
+def test_prize_number_is_optional_on_import(store):
+    event_id = store.create_event("Awards")
+
+    numbered = store.import_prizes(
+        event_id,
+        "prize_name,sponsor,prize #\nLaptop,Northwind,12\nMug,Contoso,\n",
+    )
+    numbered_again = store.import_prizes(
+        event_id,
+        "prize_name,prize_number\nNotebook,4\nPen,four\n",
+    )
+
+    prizes = store.prizes(event_id)
+    assert numbered.added == 2
+    assert numbered.errors == ()
+    assert [(prize["prize_name"], prize["prize_number"]) for prize in prizes] == [
+        ("Notebook", 4),
+        ("Laptop", 12),
+        ("Mug", None),
+    ]
+    assert numbered_again.added == 1
+    assert numbered_again.errors == (
+        "Row 3: prize number must be a whole number.",
+    )
 
 
 def test_csv_import_reports_required_name_errors(store):
@@ -138,5 +165,6 @@ def test_legacy_prize_name_column_is_migrated(tmp_path):
     store = PrizeDrawStore(db_path)
 
     assert "prize_name" in store.db.t.prizes.columns_dict
+    assert "prize_number" in store.db.t.prizes.columns_dict
     assert "name" not in store.db.t.prizes.columns_dict
     assert store.db.t.prizes(as_cls=False)[0]["prize_name"] == "Laptop"
