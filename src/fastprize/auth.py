@@ -72,8 +72,19 @@ def auth_beforeware(store):
         "/assets/.*",
     )
 
+    def display_slug(path: str) -> str | None:
+        parts = [part for part in path.split("/") if part]
+        if len(parts) == 1:
+            return parts[0]
+        if len(parts) == 2 and parts[1] == "latest":
+            return parts[0]
+        return None
+
     def is_public_path(path: str) -> bool:
-        return any(re.fullmatch(pattern, path) for pattern in public_paths)
+        if any(re.fullmatch(pattern, path) for pattern in public_paths):
+            return True
+        slug = display_slug(path)
+        return bool(slug) and store.get_event_by_slug(slug) is not None
 
     def same_origin(req) -> bool:
         origin = req.headers.get("origin")

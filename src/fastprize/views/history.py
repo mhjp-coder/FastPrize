@@ -53,11 +53,7 @@ def register_routes(rt, store):
         )
         return document(
             f"FastPrize | {event['name']} | Draw history",
-            page_header(
-                "Completed draws",
-                "Draw history",
-                f"{len(history)} completed",
-            ),
+            page_header("Draw history", f"{len(history)} completed"),
             history_table,
             event_id=event_id,
             event_name=event["name"],

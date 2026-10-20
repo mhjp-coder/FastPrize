@@ -1,7 +1,6 @@
 import json
 
 from fasthtml.common import (
-    Details,
     Div,
     Form,
     Input,
@@ -9,38 +8,29 @@ from fasthtml.common import (
     RedirectResponse,
     Request,
     Span,
-    Strong,
-    Summary,
 )
-from monsterui.franken import Button, ButtonT, Card, H2, H3, UkIcon
+from monsterui.franken import H2, H3, Button, ButtonT, Card, UkIcon
 
 from fastprize.ui import redirect_event
 
 
-def _column_info(title: str, required: str, optional: str):
-    return Details(
-        Summary(
-            UkIcon("info"),
-            aria_label=f"{title} CSV columns",
-            cls="info-trigger",
-        ),
-        Div(
-            P(Strong("Required"), f" {required}"),
-            P(Strong("Optional"), f" {optional}"),
-            cls="info-panel",
-        ),
-        cls="info-tip",
+def _column_info(title: str, *details: str):
+    return Span(
+        UkIcon("info"),
+        aria_label=f"{title} CSV columns",
+        cls="info-trigger",
+        tabindex="0",
+        data_uk_tooltip="title: " + " ".join(details),
     )
 
 
-def _file_picker(label: str, name: str, hint: str, required: str, optional: str):
+def _file_picker(label: str, name: str, *details: str):
     return Div(
         Div(
             H3(label),
-            _column_info(label, required, optional),
+            _column_info(label, *details),
             cls="cluster",
         ),
-        P(hint),
         Button(
             UkIcon("paperclip"),
             Span(f"{label} CSV"),
@@ -68,16 +58,14 @@ def import_form(event_id: int):
                 _file_picker(
                     "Entrants",
                     "entrants_file",
-                    "Import names and organizations.",
-                    "name",
-                    "organization",
+                    "Name is required. Organization is optional.",
+                    "CSV columns: name, organization",
                 ),
                 _file_picker(
                     "Prizes",
                     "prizes_file",
-                    "Import prize names, numbers, and sponsors.",
-                    "prize_name",
-                    "sponsor, prize_number",
+                    "Prize name is required. Sponsor and prize number are optional.",
+                    "CSV columns: prize_name, sponsor, number or prize_number",
                 ),
                 cls="import-fields",
             ),

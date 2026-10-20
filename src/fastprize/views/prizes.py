@@ -8,11 +8,12 @@ from fasthtml.common import (
     Span,
     Strong,
 )
-from monsterui.franken import Button, ButtonT, Card, Input
+from monsterui.franken import Button, ButtonT, Card, Input, Label, LabelT, UkIcon
 
 from fastprize.store import InvalidPrizeNumber
 from fastprize.ui import (
     document,
+    emphasized,
     page_header,
     record_list,
     redirect_event,
@@ -20,7 +21,16 @@ from fastprize.ui import (
     stat_card,
     status_banner,
     status_message,
+    status_tone,
 )
+
+
+def _prize_label(prize: dict) -> str:
+    number = prize.get("prize_number")
+    prefix = (
+        f"{emphasized('#' + str(number))} " if number is not None else ""
+    )
+    return prefix + emphasized(prize["prize_name"])
 
 
 def _prize_title(prize: dict):
@@ -38,23 +48,61 @@ def register_routes(rt, store):
         if event is None:
             raise HTTPException(status_code=404)
         prizes = store.prizes(event_id)
+        draws = {
+            draw["prize_id"]: draw for draw in reversed(store.draw_history(event_id))
+        }
         available_count = sum(not prize["drawn"] for prize in prizes)
 
         def prize_row(prize):
+            award = draws.get(prize["id"])
             actions = (
-                [Small("Awarded")]
+                [
+                    Label("Awarded", cls=LabelT.secondary),
+                    Button(
+                        UkIcon("undo-2"),
+                        type="button",
+                        cls=(ButtonT.secondary, ButtonT.icon, "icon-btn"),
+                        aria_label="Undo award",
+                        data_confirm=(
+                            "Undo the award of "
+                            + _prize_label(prize)
+                            + (
+                                f" to {emphasized(award['entrant_name'])}"
+                                if award
+                                else ""
+                            )
+                            + "? "
+                            + (
+                                f"{emphasized(award['entrant_name'])} will be eligible again, and this result will leave the history."
+                                if award
+                                else "The prize will be available again, and its result will leave the history."
+                            )
+                        ),
+                        data_confirm_action=(
+                            f"/events/{event_id}/prizes/{prize['id']}/undo"
+                        ),
+                        data_confirm_label="Undo award",
+                        data_confirm_title="Undo award",
+                        onclick="confirmDelete(this)",
+                    ),
+                ]
                 if prize["drawn"]
                 else [
-                    Form(
-                        Button("Draw"),
-                        action=f"/events/{event_id}/draws/{prize['id']}",
-                        method="post",
-                    ),
                     Button(
-                        "Remove",
+                        UkIcon("trash-2"),
                         type="button",
-                        cls=ButtonT.destructive,
-                        data_confirm=f"Remove {prize['prize_name']} from this event?",
+                        cls=(ButtonT.destructive, ButtonT.icon, "icon-btn"),
+                        aria_label="Remove",
+                        data_confirm=(
+                            "Remove "
+                            + _prize_label(prize)
+                            + (
+                                f", sponsored by {emphasized(prize['sponsor'])},"
+                                if prize["sponsor"]
+                                else ""
+                            )
+                            + " from this event?"
+                        ),
                         data_confirm_action=f"/events/{event_id}/prizes/{prize['id']}/remove",
                         onclick="confirmDelete(this)",
                     ),
@@ -108,11 +156,12 @@ def register_routes(rt, store):
                 if prize["drawn"]
                 else [
                     Button(
-                        "Edit",
+                        UkIcon("pencil"),
                         type="button",
                         onclick="startEdit(this)",
                         data_read="1",
-                        cls=ButtonT.secondary,
+                        cls=(ButtonT.secondary, ButtonT.icon, "icon-btn"),
+                        aria_label="Edit",
                     )
                 ]
             )
@@ -144,32 +193,48 @@ def register_routes(rt, store):
 
         return document(
             f"FastPrize | {event['name']} | Prizes",
-            page_header("Awards", "Prizes"),
-            status_banner(status_message(status)),
+            page_header("Prizes"),
+            status_banner(status_message(status), status_tone(status)),
             Section(
                 stat_card(available_count, "available"),
                 stat_card(len(prizes), "total"),
-                Card(
-                    Form(
-                        Input(
-                            name="prize_number",
-                            placeholder="#",
-                            aria_label="Prize number",
-                            inputmode="numeric",
-                        ),
-                        Input(name="name", placeholder="Prize name", required=True),
-                        Input(name="sponsor", placeholder="Sponsor (optional)"),
-                        Button("Add prize", cls=ButtonT.primary),
-                        action=f"/events/{event_id}/prizes",
-                        method="post",
-                        cls="add-prize-form",
-                    ),
-                    body_cls="add-card",
-                ),
-                cls="stat-row roster-row",
+                cls="stat-row",
             ),
             Card(
-                search_field("prize-roster", "Search prizes"),
+                Form(
+                    Input(
+                        name="name",
+                        placeholder="Prize name",
+                        required=True,
+                        aria_label="Prize name",
+                    ),
+                    Input(
+                        name="prize_number",
+                        placeholder="#",
+                        aria_label="Prize number",
+                        inputmode="numeric",
+                    ),
+                    Input(
+                        name="sponsor",
+                        placeholder="Sponsor (optional)",
+                        aria_label="Sponsor",
+                    ),
+                    Button(
+                        UkIcon("plus"),
+                        cls=(ButtonT.primary, ButtonT.icon, "icon-btn"),
+                        aria_label="Add prize",
+                    ),
+                    action=f"/events/{event_id}/prizes",
+                    method="post",
+                    cls="add-prize-form",
+                ),
+                body_cls="add-card",
+            ),
+            Card(
+                Div(
+                    search_field("prize-roster", "Search prizes"),
+                    cls="list-search",
+                ),
                 record_list(prizes, "No prizes yet.", prize_row, list_id="prize-roster"),
             ),
             event_id=event_id,
@@ -207,6 +272,15 @@ def register_routes(rt, store):
         return redirect_event(
             event_id,
             "prize-updated" if updated else "prize-locked",
+            "prizes",
+        )
+
+    @rt("/events/{event_id}/prizes/{prize_id}/undo", methods=["POST"])
+    def undo_award(event_id: int, prize_id: int):
+        undone = store.undo_award(event_id, prize_id)
+        return redirect_event(
+            event_id,
+            "award-undone" if undone else "award-missing",
             "prizes",
         )
 

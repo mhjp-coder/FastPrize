@@ -7,16 +7,18 @@ from fasthtml.common import (
     Section,
     Span,
 )
-from monsterui.franken import Button, ButtonT, Card, Form, H2, Input, P, Switch
+from monsterui.franken import H2, Button, ButtonT, Card, Form, Input, P, Switch
 
 from fastprize.ui import (
     EVENT_SELECTION_COOKIE,
     document,
+    emphasized,
     page_header,
     redirect_event,
     stat_card,
     status_banner,
     status_message,
+    status_tone,
 )
 from fastprize.views.imports import import_form
 
@@ -37,6 +39,20 @@ def _event_card(event: dict):
         Card(H2(event["name"])),
         href=f"/events/{event['id']}",
         cls="block-link",
+    )
+
+
+def _events_list(events: list[dict]):
+    event_links = [_event_card(event) for event in events]
+    return Section(
+        H2("Your events"),
+        Section(*event_links, cls="stats")
+        if event_links
+        else P(
+            "No events yet. Create one to start adding entrants and prizes.",
+            cls="empty-note",
+        ),
+        cls="stack",
     )
 
 
@@ -73,12 +89,11 @@ def register_routes(rt, store):
                             href=f"/events/{selected_event['id']}",
                             cls="uk-btn uk-btn-primary",
                         ),
-                        A(
+                        Button(
                             "Live Display",
-                            href=f"/events/{selected_event['id']}/display",
-                            target="_blank",
-                            rel="noopener",
-                            cls="uk-btn uk-btn-primary",
+                            type="button",
+                            cls=ButtonT.primary,
+                            onclick="openDisplayLink()",
                         ),
                     ),
                 ),
@@ -92,15 +107,10 @@ def register_routes(rt, store):
         return document(
             "FastPrize",
             page_header(
-                "",
                 "FastPrize",
                 "No folded slips. No guesswork. Keep every event, entrant, prize, and result in view.",
             ),
-            selected_panel
-            or P(
-                "Choose an event to open its workspace, or create one to get started.",
-                cls="empty-note",
-            ),
+            selected_panel or _events_list(store.list_events()),
             event_id=selected_event["id"] if selected_event else None,
             event_name=selected_event["name"] if selected_event else None,
         )
@@ -108,25 +118,13 @@ def register_routes(rt, store):
     @rt("/events", methods=["GET"])
     def events_page(req: Request):
         selected_event = _selected_event(req, store)
-        events = store.list_events()
-        event_links = [_event_card(event) for event in events]
         return document(
             "FastPrize | Events",
             page_header(
-                "Events",
                 "Choose your event.",
                 "Pick up where the suspense left off, or start a new one.",
             ),
-            Section(
-                H2("Your events"),
-                Section(*event_links, cls="stats")
-                if event_links
-                else P(
-                    "No events yet. Create one to start adding entrants and prizes.",
-                    cls="empty-note",
-                ),
-                cls="stack",
-            ),
+            _events_list(store.list_events()),
             Form(
                 DivActions(
                     Input(
@@ -166,8 +164,8 @@ def register_routes(rt, store):
         message = status_message(status)
         return document(
             f"FastPrize | {event['name']} | Events",
-            page_header("Event management", event["name"]),
-            status_banner(message),
+            page_header(event["name"]),
+            status_banner(message, status_tone(status)),
             Section(
                 stat_card(eligible_count, "eligible entrants"),
                 stat_card(available_count, "prizes available"),
@@ -175,7 +173,7 @@ def register_routes(rt, store):
             ),
             Card(
                 H2("Winner eligibility"),
-                P("Winners leave later draws when this is on, and stay eligible when it is off."),
+                P("Winners are removed from future draws?"),
                 Form(
                     Input(type="hidden", name="remove_winners", value="0"),
                     Label(
@@ -186,7 +184,7 @@ def register_routes(rt, store):
                             id="remove_winners",
                             onchange="this.form.requestSubmit()",
                         ),
-                        Span("Remove winners from future draws"),
+                        Span("Yes" if event["remove_winners"] else "No"),
                         fr="remove_winners",
                         cls="eligibility-toggle",
                     ),
@@ -197,13 +195,15 @@ def register_routes(rt, store):
             import_form(event_id),
             Card(
                 H2("Data management"),
-                P("Remove all entrants and prizes from this event."),
                 DivActions(
                     Button(
                         "Clear all entrants and prizes",
                         type="button",
                         cls=ButtonT.destructive,
-                        data_confirm="Clear all entrants and prizes from this event? This cannot be undone.",
+                        data_confirm=(
+                            "Clear all entrants and prizes from "
+                            f"{emphasized(event['name'])}? This cannot be undone."
+                        ),
                         data_confirm_action=f"/events/{event_id}/clear-data",
                         data_confirm_label="Clear all",
                         onclick="confirmDelete(this)",
@@ -213,7 +213,7 @@ def register_routes(rt, store):
                         type="button",
                         cls=ButtonT.destructive,
                         data_confirm=(
-                            f"Delete {event['name']}? This removes the event and its "
+                            f"Delete {emphasized(event['name'])}? This removes the event and its "
                             "entrants, prizes, and draw history. This cannot be undone."
                         ),
                         data_confirm_action=f"/events/{event_id}/delete",

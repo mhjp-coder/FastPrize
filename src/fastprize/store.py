@@ -11,6 +11,8 @@ from pathlib import Path
 from apsw import ConstraintError
 from fastlite import database
 
+from fastprize.slug import public_event_slug
+
 DEFAULT_DATABASE_PATH = Path(__file__).resolve().parents[2] / "fastprize.sqlite3"
 
 
@@ -146,6 +148,17 @@ class PrizeDrawStore:
 
     def get_event(self, event_id: int) -> dict | None:
         return self._one(self.db.t.events, "id = ?", (event_id,))
+
+    def display_slug(self, event: dict) -> str:
+        return public_event_slug(event, self.list_events())
+
+    def get_event_by_slug(self, slug: str) -> dict | None:
+        events = self.list_events()
+        folded = slug.casefold()
+        for event in events:
+            if public_event_slug(event, events).casefold() == folded:
+                return event
+        return None
 
     @staticmethod
     def normalize_admin_email(email: str) -> str:
@@ -374,6 +387,17 @@ class PrizeDrawStore:
                 "An entrant with that name and organization already exists"
             ) from error
 
+    def set_entrant_eligible(self, event_id: int, entrant_id: int, eligible: bool) -> bool:
+        entrant = self._one(
+            self.db.t.entrants,
+            "event_id = ? AND id = ?",
+            (event_id, entrant_id),
+        )
+        if entrant is None:
+            return False
+        self.db.t.entrants.update({"id": entrant_id, "eligible": int(eligible)})
+        return True
+
     def update_prize(
         self,
         event_id: int,
@@ -483,6 +507,36 @@ class PrizeDrawStore:
         if entrant is None:
             return False
         self.db.t.entrants.delete(entrant_id)
+        return True
+
+    def undo_award(self, event_id: int, prize_id: int) -> bool:
+        prize = self._one(
+            self.db.t.prizes,
+            "event_id = ? AND id = ? AND drawn = 1",
+            (event_id, prize_id),
+        )
+        if prize is None:
+            return False
+        draws = self.db.t.draws(
+            where="event_id = ? AND prize_id = ?",
+            where_args=(event_id, prize_id),
+            as_cls=False,
+        )
+        with self.db.conn:
+            for draw in draws:
+                entrant_id = draw["entrant_id"]
+                if entrant_id is not None and self._one(
+                    self.db.t.entrants,
+                    "event_id = ? AND id = ?",
+                    (event_id, entrant_id),
+                ):
+                    self.db.t.entrants.update({"id": entrant_id, "eligible": 1})
+                self.db.t.draws.delete(draw["id"])
+            self.db.t.draw_previews.delete_where(
+                "event_id = ? AND prize_id = ?",
+                (event_id, prize_id),
+            )
+            self.db.t.prizes.update({"id": prize_id, "drawn": 0})
         return True
 
     def remove_prize(self, event_id: int, prize_id: int) -> bool:

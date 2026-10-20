@@ -93,6 +93,39 @@ def test_draw_retains_winner_when_event_setting_is_disabled(store):
     assert len(store.draw_history(event_id)) == 2
 
 
+def test_undo_award_removes_the_draw_and_restores_eligibility(store):
+    event_id = store.create_event("Awards")
+    ada = store.add_entrant(event_id, "Ada Lovelace", "Engine Co")
+    store.add_entrant(event_id, "Grace Hopper")
+    laptop = store.add_prize(event_id, "Laptop", "Northwind")
+    headphones = store.add_prize(event_id, "Headphones")
+    store.draw(
+        event_id,
+        laptop,
+        chooser=lambda entrants: next(
+            entrant for entrant in entrants if entrant["id"] == ada
+        ),
+    )
+    store.draw(
+        event_id,
+        headphones,
+        chooser=lambda entrants: next(
+            entrant for entrant in entrants if entrant["name"] == "Grace Hopper"
+        ),
+    )
+
+    assert store.undo_award(event_id, laptop)
+
+    prizes = {prize["id"]: prize for prize in store.prizes(event_id)}
+    assert prizes[laptop]["drawn"] == 0
+    assert prizes[headphones]["drawn"] == 1
+    history = store.draw_history(event_id)
+    assert [draw["prize_name"] for draw in history] == ["Headphones"]
+    entrants = {entrant["id"]: entrant for entrant in store.entrants(event_id)}
+    assert entrants[ada]["eligible"] == 1
+    assert not store.undo_award(event_id, laptop)
+
+
 def test_draw_cannot_award_a_prize_twice_or_cross_events(store):
     first_event = store.create_event("First")
     second_event = store.create_event("Second")

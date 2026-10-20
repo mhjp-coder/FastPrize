@@ -1,3 +1,4 @@
+import segno
 from fasthtml.common import (
     A,
     Div,
@@ -5,25 +6,33 @@ from fasthtml.common import (
     HTTPException,
     JSONResponse,
     Li,
+    NotStr,
+    P,
     RedirectResponse,
-    Section,
+    Request,
     Script,
+    Section,
     Small,
     Strong,
-    Ul,
+    to_xml,
 )
-from monsterui.franken import Button, ButtonT, Card
+from monsterui.franken import H2, Button, ButtonT, Card
+from starlette.responses import HTMLResponse
 
 from fastprize.ui import (
+    award_status,
+    brand_mark,
     document,
     draw_preview_modal,
     live_quote,
     page_header,
+    paged_list,
     redirect_event,
-    search_card,
+    search_field,
     stat_card,
     status_banner,
     status_message,
+    status_tone,
     winner_fragment,
 )
 
@@ -163,28 +172,24 @@ def register_routes(rt, store):
         message = status_message(status)
         return document(
             f"FastPrize | {event['name']} | Draw",
-            page_header("Live draw", "Draw a prize"),
-            status_banner(message),
+            page_header("Draw a prize"),
+            status_banner(message, status_tone(status)),
             Section(
                 stat_card(eligible_count, "eligible entrants"),
-                search_card("prize-list", "Search prizes"),
+                stat_card(len(available_prizes), "prizes remaining"),
                 cls="stat-row",
             ),
             preview_modal if preview_modal else "",
             Card(
-                Ul(*prize_rows, id="prize-list", cls="uk-list uk-list-divider")
-                if prize_rows
-                else Div(
-                    "No prizes are available to draw.",
-                    cls="empty-note",
+                Div(
+                    search_field("prize-list", "Search prizes"),
+                    cls="list-search",
                 ),
-            ),
-            A(
-                "Live Display",
-                href=f"/events/{event_id}/display",
-                target="_blank",
-                rel="noopener",
-                cls="uk-btn uk-btn-ghost",
+                paged_list(
+                    "prize-list",
+                    prize_rows,
+                    "No prizes are available to draw.",
+                ),
             ),
             event_id=event_id,
             event_name=event["name"],
@@ -214,7 +219,7 @@ def register_routes(rt, store):
                 for entrant in store.entrants(event_id)
                 if entrant["id"] == winner
             )
-            store.draw(
+            recorded = store.draw(
                 event_id,
                 prize_id,
                 chooser=lambda entrants: next(
@@ -225,17 +230,18 @@ def register_routes(rt, store):
             )
         except ValueError, StopIteration:
             return redirect_event(event_id, "no-eligible-entrants", "draw")
-        return redirect_event(event_id, "draw-complete", "draw")
+        return redirect_event(
+            event_id,
+            award_status(recorded["entrant_name"], recorded["organization"]),
+            "draw",
+        )
 
     @rt("/events/{event_id}/draws/{prize_id}", methods=["POST"])
     def draw_prize(event_id: int, prize_id: int):
         return preview_draw_prize(event_id, prize_id)
 
-    @rt("/events/{event_id}/display")
-    def display(event_id: int):
-        event = store.get_event(event_id)
-        if event is None:
-            raise HTTPException(status_code=404)
+    def live_display_page(event: dict):
+        event_id = event["id"]
         preview = store.latest_preview(event_id)
         draw = store.latest_draw(event_id)
         current_result = (
@@ -253,9 +259,49 @@ def register_routes(rt, store):
                 hidden=None if showing_winner else True,
             ),
             winner_fragment(current_result),
-            Div("FastPrize | Live draw", cls="live-footer"),
+            Div(
+                brand_mark(),
+                "FastPrize | Live draw",
+                cls="live-footer",
+            ),
             Script(POLL_SCRIPT),
             screen=True,
+        )
+
+    @rt("/events/{event_id}/display")
+    def display(event_id: int):
+        event = store.get_event(event_id)
+        if event is None:
+            raise HTTPException(status_code=404)
+        return live_display_page(event)
+
+    @rt("/events/{event_id}/display-link")
+    def display_link(event_id: int, req: Request):
+        event = store.get_event(event_id)
+        if event is None:
+            raise HTTPException(status_code=404)
+        slug = store.display_slug(event)
+        url = f"{str(req.base_url).rstrip('/')}/{slug}"
+        qr = segno.make(url, error="m")
+        return HTMLResponse(
+            to_xml(
+                Div(
+                    H2("Live display", cls="dialog-title"),
+                    P("Open this link on the projector, or scan the code."),
+                    Div(
+                        NotStr(qr.svg_inline(scale=5, border=1, omitsize=True)),
+                        cls="display-qr",
+                    ),
+                    A(url, href=url, target="_blank", rel="noopener", cls="display-link"),
+                    Button(
+                        "Close",
+                        type="button",
+                        cls=ButtonT.secondary,
+                        onclick="this.closest('dialog').close()",
+                    ),
+                    cls="display-link-modal",
+                )
+            )
         )
 
     @rt("/events/{event_id}/display/latest")
@@ -267,3 +313,17 @@ def register_routes(rt, store):
         if preview and (draw is None or preview["created_at"] >= draw["created_at"]):
             return JSONResponse(_display_payload(preview))
         return JSONResponse(_display_payload(draw))
+
+    @rt("/{slug}/latest")
+    def latest_display_by_slug(slug: str):
+        event = store.get_event_by_slug(slug)
+        if event is None:
+            raise HTTPException(status_code=404)
+        return latest_display_result(event["id"])
+
+    @rt("/{slug}")
+    def display_by_slug(slug: str):
+        event = store.get_event_by_slug(slug)
+        if event is None:
+            raise HTTPException(status_code=404)
+        return live_display_page(event)

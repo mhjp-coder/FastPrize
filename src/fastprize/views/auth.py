@@ -1,8 +1,8 @@
 import hmac
 import time
 
-from fasthtml.common import Form, P, RedirectResponse, Request
-from monsterui.franken import Button, ButtonT, Card, H1, Input
+from fasthtml.common import Div, Form, Label, P, RedirectResponse, Request, Span
+from monsterui.franken import H1, Button, ButtonT, Card, Input, Switch, UkIcon
 
 from fastprize.auth import (
     admin_from_request,
@@ -15,7 +15,7 @@ from fastprize.auth import (
     verify_password,
     verify_unknown_password,
 )
-from fastprize.ui import document, page_header, status_banner
+from fastprize.ui import document, emphasized, page_header, status_banner
 from fastprize.views.events import _selected_event
 
 
@@ -30,7 +30,7 @@ def _login_page(req: Request, message: str = "", next_path: str = "/"):
     else:
         content = Card(
             H1("Admin sign in"),
-            P(message, cls="status-banner", role="alert") if message else "",
+            status_banner(message, "error"),
             Form(
                 Input(type="hidden", name="csrf", value=csrf_token(req)),
                 Input(type="hidden", name="next", value=next_path),
@@ -62,7 +62,7 @@ def _login_page(req: Request, message: str = "", next_path: str = "/"):
     return document("Admin sign in | FastPrize", content, login_page=True)
 
 
-def _accounts_page(req: Request, message: str = ""):
+def _accounts_page(req: Request, message: str = "", tone: str = "info"):
     store = req.app.state.store
     selected_event = _selected_event(req, store)
     admins = store.list_admins()
@@ -72,7 +72,6 @@ def _accounts_page(req: Request, message: str = ""):
         rows.append(
             Card(
                 P(admin["email"], cls="admin-email"),
-                P("Enabled" if admin["enabled"] else "Disabled"),
                 Form(
                     Input(
                         id=f"reset-password-{admin['id']}",
@@ -84,46 +83,52 @@ def _accounts_page(req: Request, message: str = ""):
                         minlength="12",
                         required=True,
                     ),
-                    Button("Reset password", type="submit", cls=ButtonT.secondary),
+                    Div(
+                        Button("Reset password", type="submit", cls=ButtonT.secondary),
+                        Button(
+                            UkIcon("trash-2"),
+                            type="button",
+                            cls=(ButtonT.destructive, ButtonT.icon, "icon-btn"),
+                            aria_label="Delete",
+                            data_confirm=(
+                                f"Delete {emphasized(admin['email'])} permanently? This cannot be undone."
+                            ),
+                            data_confirm_action=f"/admin/accounts/{admin['id']}/delete",
+                            data_confirm_label="Delete",
+                            onclick="confirmDelete(this)",
+                        )
+                        if not admin["enabled"] or enabled_count > 1
+                        else "",
+                        cls="cluster",
+                    ),
                     method="post",
                     action=f"/admin/accounts/{admin['id']}/password",
                     cls="stack",
                 ),
-                Button(
-                    "Disable" if admin["enabled"] else "Enable",
-                    type="button",
-                    cls=ButtonT.destructive if admin["enabled"] else ButtonT.primary,
-                    data_confirm=(
-                        f"Disable {admin['email']}? This account will no longer be able to sign in."
-                        if admin["enabled"]
-                        else f"Enable {admin['email']}?"
+                Form(
+                    Input(type="hidden", name="enabled", value="0"),
+                    Label(
+                        Switch(
+                            name="enabled",
+                            value="1",
+                            checked=bool(admin["enabled"]) or None,
+                            id=f"admin-enabled-{admin['id']}",
+                            onchange="this.form.requestSubmit()",
+                        ),
+                        Span("Enabled" if admin["enabled"] else "Disabled"),
+                        fr=f"admin-enabled-{admin['id']}",
+                        cls="status-toggle",
                     ),
-                    data_confirm_action=f"/admin/accounts/{admin['id']}/enabled",
-                    data_confirm_label="Disable" if admin["enabled"] else "Enable",
-                    data_confirm_field="enabled",
-                    data_confirm_value="0" if admin["enabled"] else "1",
-                    onclick="confirmDelete(this)",
+                    method="post",
+                    action=f"/admin/accounts/{admin['id']}/enabled",
                 ),
-                Button(
-                    "Delete",
-                    type="button",
-                    cls=ButtonT.destructive,
-                    data_confirm=(
-                        f"Delete {admin['email']} permanently? This cannot be undone."
-                    ),
-                    data_confirm_action=f"/admin/accounts/{admin['id']}/delete",
-                    data_confirm_label="Delete",
-                    onclick="confirmDelete(this)",
-                )
-                if not admin["enabled"] or enabled_count > 1
-                else "",
                 cls="admin-card",
             )
         )
     return document(
         "Admin accounts | FastPrize",
-        page_header("Access", "Admins"),
-        status_banner(message),
+        page_header("Admins"),
+        status_banner(message, tone),
         Card(
             P(f"{len(admins)} total, {enabled_count} enabled", id="admin-counts"),
             Form(
@@ -153,7 +158,7 @@ def _accounts_page(req: Request, message: str = ""):
                 id="admin-add-form",
             ),
         ),
-        *rows,
+        Div(*rows, cls="admin-grid"),
         event_id=selected_event["id"] if selected_event else None,
         event_name=selected_event["name"] if selected_event else None,
         active_link="accounts",
@@ -224,15 +229,17 @@ def register_routes(rt, store):
         try:
             store.create_admin(email, hash_password(password))
         except ValueError as error:
-            return _accounts_page(req, str(error))
+            return _accounts_page(req, str(error), "error")
         return _accounts_page(req, "Admin account created.")
 
     @rt("/admin/accounts/{admin_id}/enabled", methods=["POST"])
-    def account_set_enabled(req: Request, admin_id: int, enabled: int):
-        updated = store.set_admin_enabled(admin_id, bool(enabled))
+    async def account_set_enabled(req: Request, admin_id: int):
+        form = await req.form()
+        enabled = "1" in {str(value) for value in form.getlist("enabled")}
+        updated = store.set_admin_enabled(admin_id, enabled)
         if not updated:
             return _accounts_page(
-                req, "The final enabled admin cannot be disabled."
+                req, "The final enabled admin cannot be disabled.", "error"
             )
         return _accounts_page(
             req,
@@ -245,8 +252,10 @@ def register_routes(rt, store):
         removed = store.delete_admin(admin_id)
         if not removed:
             if store.get_admin(admin_id) is None:
-                return _accounts_page(req, "Admin account not found.")
-            return _accounts_page(req, "The final enabled admin cannot be deleted.")
+                return _accounts_page(req, "Admin account not found.", "error")
+            return _accounts_page(
+                req, "The final enabled admin cannot be deleted.", "error"
+            )
         if current and current["id"] == admin_id:
             clear_session(req.session)
             return RedirectResponse("/login", status_code=303)
@@ -257,7 +266,7 @@ def register_routes(rt, store):
         try:
             password_hash = hash_password(password)
         except ValueError as error:
-            return _accounts_page(req, str(error))
+            return _accounts_page(req, str(error), "error")
         if not store.update_admin_password(admin_id, password_hash):
-            return _accounts_page(req, "Admin account not found.")
+            return _accounts_page(req, "Admin account not found.", "error")
         return _accounts_page(req, "Password reset. That account must sign in again.")

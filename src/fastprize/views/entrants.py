@@ -2,6 +2,7 @@ from fasthtml.common import (
     Div,
     Form,
     HTTPException,
+    Label,
     Li,
     Section,
     Small,
@@ -9,10 +10,11 @@ from fasthtml.common import (
     Strong,
 )
 from monsterui.franken import Button as ThemeButton
-from monsterui.franken import ButtonT, Card, Input
+from monsterui.franken import ButtonT, Card, Input, Switch, UkIcon
 
 from fastprize.ui import (
     document,
+    emphasized,
     page_header,
     record_list,
     redirect_event,
@@ -20,6 +22,7 @@ from fastprize.ui import (
     stat_card,
     status_banner,
     status_message,
+    status_tone,
 )
 
 
@@ -72,21 +75,54 @@ def register_routes(rt, store):
                         cls="record-main",
                     ),
                     Div(
-                        Span("Eligible" if entrant["eligible"] else "Winner"),
+                        Label(
+                            Switch(
+                                checked=bool(entrant["eligible"]) or None,
+                                aria_label=f"Eligible status for {entrant['name']}",
+                                data_confirm=(
+                                    f"Mark {emphasized(entrant['name'])} "
+                                    + (
+                                        "ineligible for future draws?"
+                                        if entrant["eligible"]
+                                        else "eligible for future draws?"
+                                    )
+                                ),
+                                data_confirm_action=(
+                                    f"/events/{event_id}/entrants/{entrant['id']}/eligible"
+                                ),
+                                data_confirm_label="Update",
+                                data_confirm_title="Confirm eligibility",
+                                data_confirm_field="eligible",
+                                data_confirm_value="0" if entrant["eligible"] else "1",
+                                onchange="this.checked = !this.checked; confirmDelete(this)",
+                            ),
+                            Span("Eligible"),
+                            cls="status-toggle",
+                        ),
                         ThemeButton(
-                            "Remove",
+                            UkIcon("trash-2"),
                             type="button",
-                            cls=ButtonT.destructive,
-                            data_confirm=f"Remove {entrant['name']} from this event?",
+                            cls=(ButtonT.destructive, ButtonT.icon, "icon-btn"),
+                            aria_label="Remove",
+                            data_confirm=(
+                                f"Remove {emphasized(entrant['name'])}"
+                                + (
+                                    f" ({emphasized(entrant['organization'])})"
+                                    if entrant["organization"]
+                                    else ""
+                                )
+                                + " from this event?"
+                            ),
                             data_confirm_action=f"/events/{event_id}/entrants/{entrant['id']}/remove",
                             onclick="confirmDelete(this)",
                         ),
                         ThemeButton(
-                            "Edit",
+                            UkIcon("pencil"),
                             type="button",
                             onclick="startEdit(this)",
                             data_read="1",
-                            cls=ButtonT.secondary,
+                            cls=(ButtonT.secondary, ButtonT.icon, "icon-btn"),
+                            aria_label="Edit",
                         ),
                         cls="record-actions",
                     ),
@@ -97,29 +133,42 @@ def register_routes(rt, store):
 
         return document(
             f"FastPrize | {event['name']} | Entrants",
-            page_header("Event roster", "Entrants"),
-            status_banner(status_message(status)),
+            page_header("Entrants"),
+            status_banner(status_message(status), status_tone(status)),
             Section(
                 stat_card(len(entrants), "total"),
                 stat_card(eligible_count, "eligible"),
-                Card(
-                    Form(
-                        Input(name="name", placeholder="Full name", required=True),
-                        Input(
-                            name="organization",
-                            placeholder="Organization (optional)",
-                        ),
-                        ThemeButton("Add entrant", cls=ButtonT.primary),
-                        action=f"/events/{event_id}/entrants",
-                        method="post",
-                        cls="add-entrant-form",
-                    ),
-                    body_cls="add-card",
-                ),
-                cls="stat-row roster-row",
+                cls="stat-row",
             ),
             Card(
-                search_field("entrant-list", "Search entrants"),
+                Form(
+                    Input(
+                        name="name",
+                        placeholder="Full name",
+                        required=True,
+                        aria_label="Entrant name",
+                    ),
+                    Input(
+                        name="organization",
+                        placeholder="Organization (optional)",
+                        aria_label="Organization",
+                    ),
+                    ThemeButton(
+                        UkIcon("plus"),
+                        cls=(ButtonT.primary, ButtonT.icon, "icon-btn"),
+                        aria_label="Add entrant",
+                    ),
+                    action=f"/events/{event_id}/entrants",
+                    method="post",
+                    cls="add-entrant-form",
+                ),
+                body_cls="add-card",
+            ),
+            Card(
+                Div(
+                    search_field("entrant-list", "Search entrants"),
+                    cls="list-search",
+                ),
                 record_list(entrants, "No entrants yet.", entrant_row, list_id="entrant-list"),
             ),
             event_id=event_id,
@@ -148,6 +197,15 @@ def register_routes(rt, store):
         return redirect_event(
             event_id,
             "entrant-updated" if updated else "invalid-entrant",
+            "entrants",
+        )
+
+    @rt("/events/{event_id}/entrants/{entrant_id}/eligible", methods=["POST"])
+    def set_entrant_eligible(event_id: int, entrant_id: int, eligible: int):
+        updated = store.set_entrant_eligible(event_id, entrant_id, bool(eligible))
+        return redirect_event(
+            event_id,
+            "entrant-eligibility" if updated else "invalid-entrant",
             "entrants",
         )
 

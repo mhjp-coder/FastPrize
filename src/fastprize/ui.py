@@ -1,7 +1,9 @@
 import json
 import random
 from datetime import UTC, datetime, timedelta
+from html import escape
 from importlib.resources import files
+from pathlib import Path
 from urllib.parse import quote
 
 from fasthtml.common import (
@@ -9,6 +11,7 @@ from fasthtml.common import (
     H2,
     A,
     Body,
+    Button,
     Details,
     Dialog,
     Div,
@@ -20,8 +23,9 @@ from fasthtml.common import (
     Main,
     Meta,
     Nav,
-    Option,
+    NotStr,
     Optgroup,
+    Option,
     P,
     RedirectResponse,
     Script,
@@ -48,10 +52,33 @@ TECHNOLOGY_QUOTES = tuple(
 
 THEMES = (
     ("uk-theme-slate", "Slate", "#64748b", True),
-    ("uk-theme-blue", "Blue", "#2563eb", False),
-    ("uk-theme-green", "Green", "#16a34a", False),
+    ("uk-theme-stone", "Stone", "#78716c", False),
+    ("uk-theme-gray", "Gray", "#6b7280", False),
+    ("uk-theme-neutral", "Neutral", "#737373", False),
+    ("uk-theme-zinc", "Zinc", "#71717a", False),
+    ("uk-theme-red", "Red", "#dc2626", False),
     ("uk-theme-rose", "Rose", "#e11d48", False),
+    ("uk-theme-orange", "Orange", "#f97316", False),
+    ("uk-theme-green", "Green", "#16a34a", False),
+    ("uk-theme-blue", "Blue", "#2563eb", False),
     ("uk-theme-yellow", "Yellow", "#facc15", False),
+    ("uk-theme-violet", "Violet", "#7c3aed", False),
+)
+RADII = (
+    ("uk-radii-none", "None", False),
+    ("uk-radii-sm", "Small", True),
+    ("uk-radii-md", "Medium", False),
+    ("uk-radii-lg", "Large", False),
+)
+SHADOWS = (
+    ("uk-shadows-none", "None", False),
+    ("uk-shadows-sm", "Small", True),
+    ("uk-shadows-md", "Medium", False),
+    ("uk-shadows-lg", "Large", False),
+)
+FONTS = (
+    ("uk-font-sm", "Small", True),
+    ("uk-font-base", "Default", False),
 )
 
 NAV_ITEMS = (
@@ -85,11 +112,26 @@ htmlElement.classList.add(__FRANKEN__.shadows || "uk-shadows-sm");
 htmlElement.classList.add(__FRANKEN__.font || "uk-font-sm");
 """
 
+WARNING_STATUSES = {
+    "no-eligible-entrants",
+    "no-file",
+    "prize-locked",
+    "award-missing",
+}
+ERROR_STATUSES = {
+    "invalid-entrant",
+    "invalid-prize",
+    "invalid-prize-number",
+    "invalid-encoding",
+    "event-missing",
+}
+
 STATUS_MESSAGES = {
     "event-created": "Event created.",
     "entrant-added": "Entrant added.",
     "entrant-updated": "Entrant updated.",
     "entrant-removed": "Entrant removed.",
+    "entrant-eligibility": "Entrant eligibility updated.",
     "prize-added": "Prize added.",
     "prize-updated": "Prize updated.",
     "prize-removed": "Prize removed.",
@@ -97,16 +139,25 @@ STATUS_MESSAGES = {
     "settings-updated": "Winner eligibility setting updated.",
     "entrants-imported": "Entrant CSV imported.",
     "prizes-imported": "Prize CSV imported.",
-    "draw-complete": "The draw is complete. The projector is updating now.",
     "no-eligible-entrants": "Add an eligible entrant before drawing this prize.",
     "no-file": "Choose a CSV file to import.",
     "invalid-entrant": "Entrant name is required, and duplicate names are skipped.",
     "invalid-prize": "Prize name is required.",
     "invalid-prize-number": "Prize number must be a whole number.",
     "prize-locked": "Awarded prizes cannot be changed or removed.",
+    "award-undone": "Award undone. The winner is eligible again.",
+    "award-missing": "That award could not be undone.",
     "invalid-encoding": "The CSV file must use UTF-8 text encoding.",
     "event-missing": "That event could not be found.",
 }
+
+
+def award_status(name: str, organization: str = "") -> str:
+    payload = json.dumps(
+        {"name": name, "organization": organization or ""},
+        separators=(",", ":"),
+    )
+    return f"draw-complete:{payload}"
 
 
 def redirect_event(event_id: int, status: str, page: str = "events"):
@@ -117,7 +168,39 @@ def redirect_event(event_id: int, status: str, page: str = "events"):
     )
 
 
+def status_tone(status: str) -> str:
+    if status.startswith("imports-completed:"):
+        reports = json.loads(status.removeprefix("imports-completed:"))
+        added = sum(report["added"] for report in reports.values())
+        duplicates = sum(report.get("duplicates", 0) for report in reports.values())
+        errors = [error for report in reports.values() for error in report["errors"]]
+        if errors and not added:
+            return "error"
+        if errors or duplicates:
+            return "warning"
+        return "info"
+    if status.startswith(("entrants-imported:", "prizes-imported:")):
+        _kind, added, duplicates, error_count, *_details = status.split(":", 4)
+        if int(error_count) and int(added) == 0:
+            return "error"
+        if int(error_count) or int(duplicates):
+            return "warning"
+        return "info"
+    if status in ERROR_STATUSES:
+        return "error"
+    if status in WARNING_STATUSES:
+        return "warning"
+    return "info"
+
+
 def status_message(status: str) -> str:
+    if status.startswith("draw-complete:"):
+        awarded = json.loads(status.removeprefix("draw-complete:"))
+        name = awarded["name"]
+        organization = awarded.get("organization") or ""
+        if organization:
+            return f"Prize awarded to {name} of {organization}"
+        return f"Prize awarded to {name}"
     if status.startswith("imports-completed:"):
         reports = json.loads(status.removeprefix("imports-completed:"))
         imported = []
@@ -164,10 +247,74 @@ def theme_headers():
         Link(rel="stylesheet", href="/assets/app.css"),
         Script(
             """
+const scrollKey = "fastprize-scroll";
+(function () {
+    let saved = null;
+    try {
+        saved = JSON.parse(sessionStorage.getItem(scrollKey) || "null");
+        sessionStorage.removeItem(scrollKey);
+    } catch (error) {
+        saved = null;
+    }
+    if (!saved || saved.path !== location.pathname) return;
+    const y = Number(saved.y) || 0;
+    if (!y) return;
+    const restore = () => window.scrollTo(0, y);
+    const observer = new MutationObserver(restore);
+    observer.observe(document.documentElement, { childList: true, subtree: true });
+    document.addEventListener("DOMContentLoaded", () => {
+        restore();
+        observer.disconnect();
+    });
+    window.addEventListener("load", () => {
+        restore();
+        requestAnimationFrame(restore);
+    });
+})();
+document.addEventListener("submit", (event) => {
+    if (!(event.target instanceof HTMLFormElement)) return;
+    try {
+        sessionStorage.setItem(scrollKey, JSON.stringify({
+            path: location.pathname,
+            y: window.scrollY,
+        }));
+    } catch (error) {}
+});
 document.addEventListener("click", (event) => {
-    for (const menu of document.querySelectorAll(".theme-menu[open], .info-tip[open]")) {
+    for (const menu of document.querySelectorAll(".theme-menu[open]")) {
         if (!menu.contains(event.target)) menu.open = false;
     }
+    const dialog = event.target instanceof Element
+        ? event.target.closest("dialog[open]")
+        : null;
+    if (!dialog) return;
+    const bounds = dialog.getBoundingClientRect();
+    const outside = event.clientX < bounds.left || event.clientX > bounds.right
+        || event.clientY < bounds.top || event.clientY > bounds.bottom;
+    if (outside) dialog.close();
+});
+function syncShadowLabel(switcher) {
+    if (!switcher.keys || !switcher.keys.shadows) return;
+    const label = document.documentElement.classList.contains("dark") ? "Glow" : "Shadow";
+    if (switcher.keys.shadows.text === label) return;
+    switcher.keys.shadows.text = label;
+    switcher.requestUpdate();
+}
+function bindShadowLabel(switcher) {
+    syncShadowLabel(switcher);
+    switcher.addEventListener("uk-theme-switcher:change", () => syncShadowLabel(switcher));
+}
+document.addEventListener("DOMContentLoaded", () => {
+    document.querySelectorAll(".toast").forEach((toast) => {
+        window.setTimeout(() => toast.remove(), 10000);
+    });
+    document.querySelectorAll("[data-page-bar]").forEach((bar) => {
+        const list = document.getElementById(bar.dataset.list);
+        if (list) showRecordPage(list);
+    });
+    customElements.whenDefined("uk-theme-switcher").then(() => {
+        document.querySelectorAll("uk-theme-switcher").forEach(bindShadowLabel);
+    });
 });
 function startEdit(button) {
     const record = button.closest(".record");
@@ -186,12 +333,60 @@ function filterRecords(input) {
     const list = document.getElementById(input.dataset.list);
     if (!list) return;
     list.querySelectorAll("[data-search]").forEach((row) => {
-        row.hidden = query !== "" && !row.dataset.search.includes(query);
+        const matches = query === "" || row.dataset.search.includes(query);
+        row.dataset.pageMatch = matches ? "1" : "0";
     });
+    list.dataset.page = "1";
+    showRecordPage(list);
+}
+function showRecordPage(list) {
+    const bar = document.querySelector('[data-page-bar="' + list.id + '"]');
+    const pageSize = Number(bar?.dataset.pageSize || 20);
+    const rows = [...list.querySelectorAll("[data-search]")];
+    const matched = rows.filter((row) => row.dataset.pageMatch !== "0");
+    const pages = Math.max(1, Math.ceil(matched.length / pageSize));
+    let page = Number(list.dataset.page || 1);
+    page = Math.min(Math.max(page, 1), pages);
+    list.dataset.page = String(page);
+    const start = (page - 1) * pageSize;
+    matched.forEach((row, index) => {
+        row.hidden = index < start || index >= start + pageSize;
+    });
+    rows.filter((row) => row.dataset.pageMatch === "0").forEach((row) => {
+        row.hidden = true;
+    });
+    if (!bar) return;
+    const label = bar.querySelector("[data-page-label]");
+    if (label) label.textContent = "Page " + page + " of " + pages;
+    bar.querySelectorAll("[data-page]").forEach((button) => {
+        const action = button.dataset.page;
+        const atStart = page <= 1;
+        const atEnd = page >= pages;
+        button.disabled = (action === "first" || action === "prev") ? atStart : atEnd;
+    });
+}
+function changePage(button) {
+    const list = document.getElementById(button.dataset.list);
+    if (!list || button.disabled) return;
+    const bar = document.querySelector('[data-page-bar="' + list.id + '"]');
+    const pageSize = Number(bar?.dataset.pageSize || 20);
+    const matched = [...list.querySelectorAll("[data-search]")].filter(
+        (row) => row.dataset.pageMatch !== "0"
+    );
+    const pages = Math.max(1, Math.ceil(matched.length / pageSize));
+    let page = Number(list.dataset.page || 1);
+    if (button.dataset.page === "first") page = 1;
+    else if (button.dataset.page === "prev") page -= 1;
+    else if (button.dataset.page === "next") page += 1;
+    else page = pages;
+    list.dataset.page = String(page);
+    showRecordPage(list);
 }
 function confirmDelete(button) {
     const dialog = document.getElementById("confirm-delete");
-    document.getElementById("confirm-delete-message").textContent = button.dataset.confirm;
+    document.getElementById("confirm-delete-message").innerHTML = button.dataset.confirm;
+    const title = document.getElementById("confirm-delete-title");
+    if (title) title.textContent = button.dataset.confirmTitle || "Confirm removal";
     const form = document.getElementById("confirm-delete-form");
     form.action = button.dataset.confirmAction;
     form.querySelector("button").textContent = button.dataset.confirmLabel || "Remove";
@@ -207,6 +402,18 @@ function confirmDelete(button) {
     }
     if (!dialog.open) dialog.showModal();
 }
+function openDisplayLink() {
+    const dialog = document.getElementById("display-link");
+    const eventId = document.body.dataset.eventId;
+    if (!dialog || !eventId) return;
+    fetch("/events/" + eventId + "/display-link")
+        .then((response) => response.ok ? response.text() : "")
+        .then((html) => {
+            if (!html) return;
+            dialog.innerHTML = html;
+            if (!dialog.open) dialog.showModal();
+        });
+}
 """
         ),
     )
@@ -216,6 +423,18 @@ def theme_picker():
     theme_options = [
         Option(label, value=value, data_hex=color, selected=selected or None)
         for value, label, color, selected in THEMES
+    ]
+    radius_options = [
+        Option(label, value=value, selected=selected or None)
+        for value, label, selected in RADII
+    ]
+    shadow_options = [
+        Option(label, value=value, selected=selected or None)
+        for value, label, selected in SHADOWS
+    ]
+    font_options = [
+        Option(label, value=value, selected=selected or None)
+        for value, label, selected in FONTS
     ]
     return Details(
         Summary(
@@ -227,6 +446,9 @@ def theme_picker():
             Uk_theme_switcher(
                 Select(
                     Optgroup(*theme_options, data_key="theme", label="Theme"),
+                    Optgroup(*radius_options, data_key="radii", label="Radius"),
+                    Optgroup(*shadow_options, data_key="shadows", label="Shadow"),
+                    Optgroup(*font_options, data_key="font", label="Font"),
                     Optgroup(
                         Option("Light", value="light", data_icon="sun"),
                         Option("Dark", value="dark", data_icon="moon"),
@@ -254,17 +476,20 @@ def _href(key: str, event_id: int | None) -> str:
 
 
 def _nav_link(key: str, label: str, icon: str, event_id: int | None, active_link: str):
-    attributes = {}
-    if key == "display":
-        attributes["target"] = "_blank"
-        attributes["rel"] = "noopener"
+    if key == "display" and event_id is not None:
+        return Button(
+            UkIcon(icon),
+            Span(label),
+            type="button",
+            cls="nav-link",
+            onclick="openDisplayLink()",
+        )
     return A(
         UkIcon(icon),
         Span(label),
         href=_href(key, event_id),
         cls="nav-link",
         aria_current="page" if active_link == key else None,
-        **attributes,
     )
 
 
@@ -299,6 +524,13 @@ def _grouped_nav(event_id: int | None, active_link: str, keys: tuple[str, ...] |
     return rendered
 
 
+def brand_mark():
+    svg = (
+        Path(__file__).resolve().parents[2] / "assets" / "fastprize-favicon.svg"
+    ).read_text(encoding="utf-8")
+    return NotStr(svg)
+
+
 def document(
     title: str,
     *content,
@@ -316,7 +548,7 @@ def document(
     elif login_page:
         body = (Main(*content, cls="login-shell"),)
     else:
-        brand = A(UkIcon("dices"), Span("FastPrize"), href="/", cls="brand")
+        brand = A(brand_mark(), Span("FastPrize"), href="/", cls="brand")
         secondary_keys = tuple(
             key for key, *_rest in NAV_ITEMS if key not in MOBILE_KEYS
         )
@@ -326,11 +558,14 @@ def document(
                     brand,
                     P(event_name or "Choose an event", cls="nav-label"),
                     *_grouped_nav(event_id, active_link, None),
-                    Div(theme_picker(), cls="sidebar-theme"),
-                    Form(
-                        ThemeButton("Sign out", type="submit", cls=ButtonT.ghost),
-                        action="/logout",
-                        method="post",
+                    Div(
+                        Div(theme_picker(), cls="sidebar-theme"),
+                        Form(
+                            ThemeButton("Sign out", type="submit", cls=ButtonT.ghost),
+                            action="/logout",
+                            method="post",
+                        ),
+                        cls="sidebar-footer",
                     ),
                     cls="sidebar",
                 ),
@@ -357,6 +592,7 @@ def document(
                 cls="app-shell",
             ),
             confirm_dialog(),
+            Dialog(id="display-link", cls="draw-dialog") if event_id is not None else "",
         )
     return Html(
         Head(
@@ -365,7 +601,11 @@ def document(
             Title(title),
             *theme_headers(),
         ),
-        Body(*body, cls="bg-background text-foreground"),
+        Body(
+            *body,
+            cls="bg-background text-foreground",
+            data_event_id=str(event_id) if event_id is not None else None,
+        ),
     )
 
 
@@ -379,36 +619,96 @@ def DetailsMenu(event_id: int, active_link: str, keys: tuple[str, ...]):
     )
 
 
-def page_header(eyebrow: str, title: str, detail: str = ""):
+def page_header(title: str, detail: str = ""):
     from monsterui.franken import H1
 
     return Div(
-        P(eyebrow, cls="nav-label") if eyebrow else "",
         H1(title),
         P(detail) if detail else "",
         cls="page-header",
     )
 
 
-def status_banner(message: str):
+def status_banner(message: str, tone: str = "info"):
     if not message:
         return ""
-    return P(message, cls="status-banner")
+    if tone not in {"info", "warning", "error"}:
+        tone = "info"
+    return Div(
+        P(message),
+        Button(
+            "×",
+            type="button",
+            cls="toast-close",
+            aria_label="Dismiss",
+            onclick="this.closest('.toast').remove()",
+        ),
+        cls=f"toast toast-{tone}",
+        role="alert" if tone == "error" else "status",
+    )
+
+
+PAGE_SIZE = 20
+
+
+def list_pagination(list_id: str, total: int):
+    from monsterui.franken import ButtonT, DivLAligned, TextT, UkIconLink
+
+    pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
+
+    def control(icon: str, action: str, label: str, *, disabled: bool = False):
+        return UkIconLink(
+            icon,
+            button=True,
+            type="button",
+            cls=("uk-btn", ButtonT.ghost, ButtonT.icon, "icon-btn"),
+            aria_label=label,
+            data_page=action,
+            data_list=list_id,
+            disabled=True if disabled else None,
+            onclick="changePage(this)",
+        )
+
+    return DivLAligned(
+        Span(f"Page 1 of {pages}", cls=TextT.sm, data_page_label=list_id),
+        DivLAligned(
+            control("chevrons-left", "first", "First page", disabled=True),
+            control("chevron-left", "prev", "Previous page", disabled=True),
+            control("chevron-right", "next", "Next page", disabled=pages <= 1),
+            control("chevrons-right", "last", "Last page", disabled=pages <= 1),
+            cls="pagination-controls",
+        ),
+        cls="list-pagination",
+        data_page_bar=list_id,
+        data_list=list_id,
+        data_page_size=str(PAGE_SIZE),
+    )
+
+
+def paged_list(list_id: str, rows: list, empty_message: str):
+    if not rows:
+        return P(empty_message, cls="empty-note")
+    for index, row in enumerate(rows):
+        row.attrs["data-page-match"] = "1"
+        if index >= PAGE_SIZE:
+            row.attrs["hidden"] = True
+    return Div(
+        Ul(*rows, id=list_id or None, cls="uk-list uk-list-divider"),
+        list_pagination(list_id, len(rows)),
+    )
 
 
 def record_list(records: list[dict], empty_message: str, render_record, list_id: str = ""):
-    if not records:
-        return P(empty_message, cls="empty-note")
-    return Ul(
-        *(render_record(record) for record in records),
-        id=list_id or None,
-        cls="uk-list uk-list-divider",
+    return paged_list(
+        list_id,
+        [render_record(record) for record in records],
+        empty_message,
     )
 
 
 def stat_card(value, label: str):
-    from monsterui.franken import Card
     from monsterui.franken import H2 as CardHeading
+    from monsterui.franken import Card
 
     return Card(CardHeading(str(value)), P(label))
 
@@ -490,9 +790,13 @@ def winner_fragment(draw: dict | None):
     )
 
 
+def emphasized(value: str) -> str:
+    return f"<strong>{escape(value)}</strong>"
+
+
 def confirm_dialog():
     return Dialog(
-        H2("Confirm removal"),
+        H2("Confirm removal", id="confirm-delete-title", cls="dialog-title"),
         P(id="confirm-delete-message"),
         Div(
             Form(
@@ -513,15 +817,31 @@ def confirm_dialog():
     )
 
 
+def _draw_confirmation_message(prize: dict, winner: dict):
+    message = [Strong(winner["name"])]
+    if winner["organization"]:
+        message.extend([" from ", Strong(winner["organization"])])
+    message.extend([" has been selected for ", Strong(prize["prize_name"])])
+    if prize["sponsor"]:
+        message.extend([", sponsored by ", Strong(prize["sponsor"])])
+    message.append(".")
+    return P(*message)
+
+
 def draw_preview_modal(
     event_id: int, prize_id: int, winner_id: int, prize: dict, winner: dict
 ):
     return Div(
         Dialog(
-            H2("Confirm draw"),
-            P(
-                f"{winner['name']} from {winner['organization'] or 'an unlisted organization'} has been selected for {prize['prize_name']}."
+            Button(
+                "×",
+                type="button",
+                cls="dialog-close",
+                aria_label="Close",
+                onclick="this.closest('dialog').close()",
             ),
+            H2("Confirm draw", cls="dialog-title"),
+            _draw_confirmation_message(prize, winner),
             Div(
                 Form(
                     Input(type="hidden", name="winner", value=str(winner_id)),
