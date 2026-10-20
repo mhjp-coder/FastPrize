@@ -2,7 +2,19 @@ import hmac
 import time
 
 from fasthtml.common import Div, Form, Label, P, RedirectResponse, Request, Span
-from monsterui.franken import H1, Button, ButtonT, Card, Input, Switch, UkIcon
+from monsterui.franken import (
+    H1,
+    Button,
+    ButtonT,
+    Card,
+    CodeSpan,
+    FlexT,
+    Grid,
+    Input,
+    Switch,
+    TextT,
+    UkIcon,
+)
 
 from fastprize.auth import (
     admin_from_request,
@@ -15,8 +27,19 @@ from fastprize.auth import (
     verify_password,
     verify_unknown_password,
 )
-from fastprize.ui import document, emphasized, page_header, status_banner
+from fastprize.ui import (
+    brand_mark,
+    document,
+    emphasized,
+    hstack,
+    page_header,
+    status_banner,
+)
 from fastprize.views.events import _selected_event
+
+
+def _login_brand():
+    return Div(brand_mark(), Span("FastPrize"), cls="brand login-brand")
 
 
 def _login_page(req: Request, message: str = "", next_path: str = "/"):
@@ -24,8 +47,9 @@ def _login_page(req: Request, message: str = "", next_path: str = "/"):
         content = Card(
             H1("Admin setup required"),
             P("Create the first admin locally on the server:"),
-            P("uv run fastprize-admin create you@example.com", cls="login-command"),
+            P(CodeSpan("uv run fastprize-admin create you@example.com")),
             P("Then sign in here. Admin accounts can be managed in the app afterward."),
+            cls="w-full max-w-md",
         )
     else:
         content = Card(
@@ -53,13 +77,18 @@ def _login_page(req: Request, message: str = "", next_path: str = "/"):
                     placeholder="Password",
                     aria_label="Password",
                 ),
-                Button("Sign in", type="submit", cls=ButtonT.primary),
+                Button("Sign in", type="submit", cls=(ButtonT.primary, "self-start")),
                 method="post",
                 action="/login",
-                cls="stack",
+                cls=(FlexT.block, FlexT.column, "gap-6"),
             ),
+            cls="w-full max-w-md",
         )
-    return document("Admin sign in | FastPrize", content, login_page=True)
+    return document(
+        "Admin sign in | FastPrize",
+        Div(_login_brand(), content, cls="login-intro"),
+        login_page=True,
+    )
 
 
 def _accounts_page(req: Request, message: str = "", tone: str = "info"):
@@ -71,7 +100,7 @@ def _accounts_page(req: Request, message: str = "", tone: str = "info"):
     for admin in admins:
         rows.append(
             Card(
-                P(admin["email"], cls="admin-email"),
+                P(admin["email"], cls=TextT.bold),
                 Form(
                     Input(
                         id=f"reset-password-{admin['id']}",
@@ -83,7 +112,7 @@ def _accounts_page(req: Request, message: str = "", tone: str = "info"):
                         minlength="12",
                         required=True,
                     ),
-                    Div(
+                    hstack(
                         Button("Reset password", type="submit", cls=ButtonT.secondary),
                         Button(
                             UkIcon("trash-2"),
@@ -99,11 +128,10 @@ def _accounts_page(req: Request, message: str = "", tone: str = "info"):
                         )
                         if not admin["enabled"] or enabled_count > 1
                         else "",
-                        cls="cluster",
                     ),
                     method="post",
                     action=f"/admin/accounts/{admin['id']}/password",
-                    cls="stack",
+                    cls=(FlexT.block, FlexT.column, "gap-6"),
                 ),
                 Form(
                     Input(type="hidden", name="enabled", value="0"),
@@ -117,12 +145,11 @@ def _accounts_page(req: Request, message: str = "", tone: str = "info"):
                         ),
                         Span("Enabled" if admin["enabled"] else "Disabled"),
                         fr=f"admin-enabled-{admin['id']}",
-                        cls="status-toggle",
+                        cls=(FlexT.inline, FlexT.middle, "w-fit cursor-pointer gap-3"),
                     ),
                     method="post",
                     action=f"/admin/accounts/{admin['id']}/enabled",
                 ),
-                cls="admin-card",
             )
         )
     return document(
@@ -130,7 +157,6 @@ def _accounts_page(req: Request, message: str = "", tone: str = "info"):
         page_header("Admins"),
         status_banner(message, tone),
         Card(
-            P(f"{len(admins)} total, {enabled_count} enabled", id="admin-counts"),
             Form(
                 Input(
                     id="new-email",
@@ -151,14 +177,14 @@ def _accounts_page(req: Request, message: str = "", tone: str = "info"):
                     minlength="12",
                     required=True,
                 ),
-                Button("Add admin", type="submit", cls=ButtonT.primary),
+                Button("Add admin", type="submit", cls=(ButtonT.primary, "self-start")),
                 method="post",
                 action="/admin/accounts",
-                cls="stack",
+                cls=(FlexT.block, FlexT.column, "gap-6"),
                 id="admin-add-form",
             ),
         ),
-        Div(*rows, cls="admin-grid"),
+        Grid(*rows, cols_sm=1, cols_md=2, cols_lg=2, cols_xl=2, cls="gap-8"),
         event_id=selected_event["id"] if selected_event else None,
         event_name=selected_event["name"] if selected_event else None,
         active_link="accounts",

@@ -4,19 +4,31 @@ from fasthtml.common import (
     HTTPException,
     Label,
     Li,
-    Section,
-    Small,
     Span,
     Strong,
 )
 from monsterui.franken import Button as ThemeButton
-from monsterui.franken import ButtonT, Card, Input, Switch, UkIcon
+from monsterui.franken import (
+    ButtonT,
+    Card,
+    FlexT,
+    Grid,
+    Input,
+    Small,
+    Switch,
+    TextT,
+    UkIcon,
+)
 
 from fastprize.ui import (
     document,
     emphasized,
+    hstack,
     page_header,
+    record_actions,
+    record_body,
     record_list,
+    record_row,
     redirect_event,
     search_field,
     stat_card,
@@ -37,12 +49,13 @@ def register_routes(rt, store):
 
         def entrant_row(entrant):
             return Li(
-                Div(
-                    Div(
+                record_row(
+                    record_body(
                         Strong(entrant["name"], data_read="1"),
                         Small(
                             entrant["organization"] or "No organization listed",
                             data_read="1",
+                            cls=TextT.meta,
                         ),
                         Form(
                             Input(
@@ -56,7 +69,7 @@ def register_routes(rt, store):
                                 value=entrant["organization"],
                                 aria_label="Organization",
                             ),
-                            Div(
+                            hstack(
                                 ThemeButton("Save", cls=ButtonT.primary),
                                 ThemeButton(
                                     "Cancel",
@@ -64,17 +77,15 @@ def register_routes(rt, store):
                                     onclick="cancelEdit(this)",
                                     cls=ButtonT.secondary,
                                 ),
-                                cls="cluster",
                             ),
                             action=f"/events/{event_id}/entrants/{entrant['id']}/edit",
                             method="post",
                             hidden=True,
                             data_write="1",
-                            cls="record-edit",
+                            cls=(FlexT.block, FlexT.column, "record-edit w-full gap-3"),
                         ),
-                        cls="record-main",
                     ),
-                    Div(
+                    record_actions(
                         Label(
                             Switch(
                                 checked=bool(entrant["eligible"]) or None,
@@ -97,7 +108,19 @@ def register_routes(rt, store):
                                 onchange="this.checked = !this.checked; confirmDelete(this)",
                             ),
                             Span("Eligible"),
-                            cls="status-toggle",
+                            cls=(
+                                FlexT.inline,
+                                FlexT.middle,
+                                "w-fit cursor-pointer gap-3",
+                            ),
+                        ),
+                        ThemeButton(
+                            UkIcon("pencil"),
+                            type="button",
+                            onclick="startEdit(this)",
+                            data_read="1",
+                            cls=(ButtonT.secondary, ButtonT.icon, "icon-btn"),
+                            aria_label="Edit",
                         ),
                         ThemeButton(
                             UkIcon("trash-2"),
@@ -116,17 +139,7 @@ def register_routes(rt, store):
                             data_confirm_action=f"/events/{event_id}/entrants/{entrant['id']}/remove",
                             onclick="confirmDelete(this)",
                         ),
-                        ThemeButton(
-                            UkIcon("pencil"),
-                            type="button",
-                            onclick="startEdit(this)",
-                            data_read="1",
-                            cls=(ButtonT.secondary, ButtonT.icon, "icon-btn"),
-                            aria_label="Edit",
-                        ),
-                        cls="record-actions",
                     ),
-                    cls="record",
                 ),
                 data_search=f"{entrant['name']} {entrant['organization'] or ''}".lower(),
             )
@@ -135,10 +148,11 @@ def register_routes(rt, store):
             f"FastPrize | {event['name']} | Entrants",
             page_header("Entrants"),
             status_banner(status_message(status), status_tone(status)),
-            Section(
+            Grid(
                 stat_card(len(entrants), "total"),
                 stat_card(eligible_count, "eligible"),
-                cls="stat-row",
+                cols_max=2,
+                cls="gap-6",
             ),
             Card(
                 Form(
@@ -160,9 +174,11 @@ def register_routes(rt, store):
                     ),
                     action=f"/events/{event_id}/entrants",
                     method="post",
-                    cls="add-entrant-form",
+                    cls=(
+                        "grid grid-cols-1 items-end gap-3 "
+                        "md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]"
+                    ),
                 ),
-                body_cls="add-card",
             ),
             Card(
                 Div(

@@ -38,7 +38,7 @@ from fasthtml.common import (
 )
 from fasthtml.components import Uk_theme_switcher
 from monsterui.franken import Button as ThemeButton
-from monsterui.franken import ButtonT, UkIcon
+from monsterui.franken import ButtonT, FlexT, Placeholder, TextT, UkIcon
 
 EVENT_SELECTION_COOKIE = "fastprize_event_id"
 TECHNOLOGY_QUOTES = tuple(
@@ -51,7 +51,7 @@ TECHNOLOGY_QUOTES = tuple(
 )
 
 THEMES = (
-    ("uk-theme-slate", "Slate", "#64748b", True),
+    ("uk-theme-slate", "Slate", "#64748b", False),
     ("uk-theme-stone", "Stone", "#78716c", False),
     ("uk-theme-gray", "Gray", "#6b7280", False),
     ("uk-theme-neutral", "Neutral", "#737373", False),
@@ -60,15 +60,15 @@ THEMES = (
     ("uk-theme-rose", "Rose", "#e11d48", False),
     ("uk-theme-orange", "Orange", "#f97316", False),
     ("uk-theme-green", "Green", "#16a34a", False),
-    ("uk-theme-blue", "Blue", "#2563eb", False),
+    ("uk-theme-blue", "Blue", "#2563eb", True),
     ("uk-theme-yellow", "Yellow", "#facc15", False),
     ("uk-theme-violet", "Violet", "#7c3aed", False),
 )
 RADII = (
     ("uk-radii-none", "None", False),
-    ("uk-radii-sm", "Small", True),
+    ("uk-radii-sm", "Small", False),
     ("uk-radii-md", "Medium", False),
-    ("uk-radii-lg", "Large", False),
+    ("uk-radii-lg", "Large", True),
 )
 SHADOWS = (
     ("uk-shadows-none", "None", False),
@@ -77,8 +77,8 @@ SHADOWS = (
     ("uk-shadows-lg", "Large", False),
 )
 FONTS = (
-    ("uk-font-sm", "Small", True),
-    ("uk-font-base", "Default", False),
+    ("uk-font-sm", "Small", False),
+    ("uk-font-base", "Default", True),
 )
 
 NAV_ITEMS = (
@@ -97,19 +97,15 @@ MOBILE_KEYS = ("draw", "display", "entrants", "prizes", "overview")
 THEME_SCRIPT = """
 const htmlElement = document.documentElement;
 const __FRANKEN__ = JSON.parse(localStorage.getItem("__FRANKEN__") || "{}");
-if (
-    __FRANKEN__.mode === "dark" ||
-    (!__FRANKEN__.mode &&
-        window.matchMedia("(prefers-color-scheme: dark)").matches)
-) {
-    htmlElement.classList.add("dark");
-} else {
+if (__FRANKEN__.mode === "light") {
     htmlElement.classList.remove("dark");
+} else {
+    htmlElement.classList.add("dark");
 }
-htmlElement.classList.add(__FRANKEN__.theme || "uk-theme-slate");
-htmlElement.classList.add(__FRANKEN__.radii || "uk-radii-sm");
+htmlElement.classList.add(__FRANKEN__.theme || "uk-theme-blue");
+htmlElement.classList.add(__FRANKEN__.radii || "uk-radii-lg");
 htmlElement.classList.add(__FRANKEN__.shadows || "uk-shadows-sm");
-htmlElement.classList.add(__FRANKEN__.font || "uk-font-sm");
+htmlElement.classList.add(__FRANKEN__.font || "uk-font-base");
 """
 
 WARNING_STATUSES = {
@@ -281,7 +277,7 @@ document.addEventListener("submit", (event) => {
     } catch (error) {}
 });
 document.addEventListener("click", (event) => {
-    for (const menu of document.querySelectorAll(".theme-menu[open]")) {
+    for (const menu of document.querySelectorAll(".theme-menu[open], .more-menu[open]")) {
         if (!menu.contains(event.target)) menu.open = false;
     }
     const dialog = event.target instanceof Element
@@ -312,6 +308,8 @@ document.addEventListener("DOMContentLoaded", () => {
         const list = document.getElementById(bar.dataset.list);
         if (list) showRecordPage(list);
     });
+    formatHistoryTimes();
+    revealLinkedPrize();
     customElements.whenDefined("uk-theme-switcher").then(() => {
         document.querySelectorAll("uk-theme-switcher").forEach(bindShadowLabel);
     });
@@ -338,6 +336,43 @@ function filterRecords(input) {
     });
     list.dataset.page = "1";
     showRecordPage(list);
+}
+function formatHistoryTimes() {
+    document.querySelectorAll("time.history-time").forEach((node) => {
+        const value = node.dateTime;
+        if (!value) return;
+        const zoned = /(?:Z|[+-]\\d{2}:\\d{2})$/.test(value) ? value : value + "Z";
+        const date = new Date(zoned);
+        if (Number.isNaN(date.getTime())) return;
+        const pad = (part) => String(part).padStart(2, "0");
+        node.textContent = [
+            date.getFullYear(),
+            pad(date.getMonth() + 1),
+            pad(date.getDate()),
+        ].join("-") + " " + pad(date.getHours()) + ":" + pad(date.getMinutes());
+        const row = node.closest("[data-search]");
+        if (row && !row.dataset.localTime) {
+            row.dataset.search += " " + node.textContent.toLowerCase();
+            row.dataset.localTime = "1";
+        }
+    });
+}
+function revealLinkedPrize() {
+    if (!location.hash.startsWith("#prize-")) return;
+    const row = document.getElementById(location.hash.slice(1));
+    const list = row && row.closest("ul");
+    if (!row || !list) return;
+    const matched = [...list.querySelectorAll("[data-search]")].filter(
+        (item) => item.dataset.pageMatch !== "0"
+    );
+    const index = matched.indexOf(row);
+    if (index < 0) return;
+    const bar = document.querySelector('[data-page-bar="' + list.id + '"]');
+    const pageSize = Number(bar?.dataset.pageSize || 20);
+    list.dataset.page = String(Math.floor(index / pageSize) + 1);
+    showRecordPage(list);
+    row.classList.add("prize-highlight");
+    row.scrollIntoView({block: "center"});
 }
 function showRecordPage(list) {
     const bar = document.querySelector('[data-page-bar="' + list.id + '"]');
@@ -451,7 +486,7 @@ def theme_picker():
                     Optgroup(*font_options, data_key="font", label="Font"),
                     Optgroup(
                         Option("Light", value="light", data_icon="sun"),
-                        Option("Dark", value="dark", data_icon="moon"),
+                        Option("Dark", value="dark", data_icon="moon", selected=True),
                         data_key="mode",
                         label="Mode",
                     ),
@@ -515,13 +550,49 @@ def _grouped_nav(event_id: int | None, active_link: str, keys: tuple[str, ...] |
     for group, links in groups:
         label = {"show": "Show", "setup": "Setup"}.get(group, "")
         rendered.append(
-            Div(
+                Div(
                 P(label, cls="nav-label") if label else "",
                 *links,
-                cls="nav-group",
+                cls=(FlexT.block, FlexT.column, "nav-group gap-1"),
             )
         )
     return rendered
+
+
+def vstack(*children, cls=(), **kwargs):
+    return Div(*children, cls=(FlexT.block, FlexT.column, "gap-6", cls), **kwargs)
+
+
+def hstack(*children, cls=(), **kwargs):
+    return Div(
+        *children,
+        cls=(FlexT.block, FlexT.row, FlexT.wrap, FlexT.middle, "gap-3", cls),
+        **kwargs,
+    )
+
+
+def record_row(*children, **kwargs):
+    return Div(
+        *children,
+        cls=(FlexT.block, FlexT.wrap, FlexT.between, "record gap-x-6 gap-y-3 py-4"),
+        **kwargs,
+    )
+
+
+def record_body(*children, **kwargs):
+    return Div(
+        *children,
+        cls=(FlexT.block, FlexT.column, FlexT.top, "min-w-48 flex-1 gap-3"),
+        **kwargs,
+    )
+
+
+def record_actions(*children, **kwargs):
+    return Div(
+        *children,
+        cls=(FlexT.block, FlexT.wrap, FlexT.middle, "gap-3"),
+        **kwargs,
+    )
 
 
 def brand_mark():
@@ -546,7 +617,7 @@ def document(
             Div(theme_picker(), cls="theme-dock"),
         )
     elif login_page:
-        body = (Main(*content, cls="login-shell"),)
+        body = (Main(*content, cls="login-screen"),)
     else:
         brand = A(brand_mark(), Span("FastPrize"), href="/", cls="brand")
         secondary_keys = tuple(
@@ -572,9 +643,7 @@ def document(
                 Div(
                     Div(
                         brand,
-                        DetailsMenu(event_id, active_link, secondary_keys)
-                        if event_id is not None
-                        else "",
+                        DetailsMenu(event_id, active_link, secondary_keys),
                         cls="topbar",
                     ),
                     Main(*content, cls="main-pad"),
@@ -609,12 +678,32 @@ def document(
     )
 
 
-def DetailsMenu(event_id: int, active_link: str, keys: tuple[str, ...]):
+def DetailsMenu(event_id: int | None, active_link: str, keys: tuple[str, ...]):
     from fasthtml.common import Details, Summary
 
+    bar = Span(
+        Span(),
+        Span(),
+        Span(),
+        cls="hamburger",
+        aria_hidden="true",
+    )
+    groups = _grouped_nav(event_id, active_link, keys) if event_id is not None else []
     return Details(
-        Summary("More", cls="nav-link"),
-        *_grouped_nav(event_id, active_link, keys),
+        Summary(bar, aria_label="Menu", cls="menu-toggle"),
+        Div(
+            *groups,
+            Div(
+                Form(
+                    ThemeButton("Sign out", type="submit", cls=ButtonT.ghost),
+                    action="/logout",
+                    method="post",
+                ),
+                theme_picker(),
+                cls="more-menu-tools",
+            ),
+            cls="more-panel",
+        ),
         cls="more-menu mobile-only",
     )
 
@@ -652,7 +741,7 @@ PAGE_SIZE = 20
 
 
 def list_pagination(list_id: str, total: int):
-    from monsterui.franken import ButtonT, DivLAligned, TextT, UkIconLink
+    from monsterui.franken import ButtonT, UkIconLink
 
     pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
 
@@ -669,16 +758,16 @@ def list_pagination(list_id: str, total: int):
             onclick="changePage(this)",
         )
 
-    return DivLAligned(
-        Span(f"Page 1 of {pages}", cls=TextT.sm, data_page_label=list_id),
-        DivLAligned(
+    return Div(
+        Span(f"Page 1 of {pages}", cls=TextT.meta, data_page_label=list_id),
+        Div(
             control("chevrons-left", "first", "First page", disabled=True),
             control("chevron-left", "prev", "Previous page", disabled=True),
             control("chevron-right", "next", "Next page", disabled=pages <= 1),
             control("chevrons-right", "last", "Last page", disabled=pages <= 1),
-            cls="pagination-controls",
+            cls=(FlexT.block, FlexT.middle, "gap-1"),
         ),
-        cls="list-pagination",
+        cls=(FlexT.block, FlexT.right, FlexT.middle, "mt-4 gap-3"),
         data_page_bar=list_id,
         data_list=list_id,
         data_page_size=str(PAGE_SIZE),
@@ -687,7 +776,7 @@ def list_pagination(list_id: str, total: int):
 
 def paged_list(list_id: str, rows: list, empty_message: str):
     if not rows:
-        return P(empty_message, cls="empty-note")
+        return Placeholder(P(empty_message))
     for index, row in enumerate(rows):
         row.attrs["data-page-match"] = "1"
         if index >= PAGE_SIZE:
@@ -710,7 +799,7 @@ def stat_card(value, label: str):
     from monsterui.franken import H2 as CardHeading
     from monsterui.franken import Card
 
-    return Card(CardHeading(str(value)), P(label))
+    return Card(CardHeading(str(value)), P(label), cls="h-full")
 
 
 def search_field(list_id: str, label: str):
@@ -810,7 +899,7 @@ def confirm_dialog():
                 onclick="this.closest('dialog').close()",
                 cls=ButtonT.secondary,
             ),
-            cls="cluster",
+            cls=(FlexT.block, FlexT.row, FlexT.wrap, FlexT.middle, "gap-3"),
         ),
         id="confirm-delete",
         cls="draw-dialog",
@@ -845,7 +934,11 @@ def draw_preview_modal(
             Div(
                 Form(
                     Input(type="hidden", name="winner", value=str(winner_id)),
-                    ThemeButton("Award winner", cls=ButtonT.primary),
+                    ThemeButton(
+                        "Award winner",
+                        cls=ButtonT.primary,
+                        autofocus=True,
+                    ),
                     action=f"/events/{event_id}/draws/{prize_id}/award",
                     method="post",
                 ),
@@ -854,7 +947,7 @@ def draw_preview_modal(
                     action=f"/events/{event_id}/draws/{prize_id}/preview",
                     method="post",
                 ),
-                cls="cluster",
+                cls=(FlexT.block, FlexT.row, FlexT.wrap, FlexT.middle, "gap-3"),
             ),
             id="draw-confirmation",
             cls="draw-dialog",

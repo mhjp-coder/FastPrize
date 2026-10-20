@@ -9,9 +9,9 @@ from fasthtml.common import (
     Request,
     Span,
 )
-from monsterui.franken import H2, H3, Button, ButtonT, Card, UkIcon
+from monsterui.franken import H2, H3, Button, ButtonT, Card, FlexT, Grid, UkIcon
 
-from fastprize.ui import redirect_event
+from fastprize.ui import hstack, redirect_event
 
 
 def _column_info(title: str, *details: str):
@@ -20,16 +20,15 @@ def _column_info(title: str, *details: str):
         aria_label=f"{title} CSV columns",
         cls="info-trigger",
         tabindex="0",
-        data_uk_tooltip="title: " + " ".join(details),
+        data_uk_tooltip="title: " + "<br><br>".join(details),
     )
 
 
 def _file_picker(label: str, name: str, *details: str):
     return Div(
-        Div(
+        hstack(
             H3(label),
             _column_info(label, *details),
-            cls="cluster",
         ),
         Button(
             UkIcon("paperclip"),
@@ -45,7 +44,7 @@ def _file_picker(label: str, name: str, *details: str):
             hidden=True,
             onchange="this.previousElementSibling.querySelector('span').textContent = this.files[0].name",
         ),
-        cls="import-field",
+        cls=(FlexT.block, FlexT.column, FlexT.top, "gap-3"),
     )
 
 
@@ -54,7 +53,7 @@ def import_form(event_id: int):
         H2("Import"),
         P("Load entrants and prizes from CSV files."),
         Form(
-            Div(
+            Grid(
                 _file_picker(
                     "Entrants",
                     "entrants_file",
@@ -67,13 +66,14 @@ def import_form(event_id: int):
                     "Prize name is required. Sponsor and prize number are optional.",
                     "CSV columns: prize_name, sponsor, number or prize_number",
                 ),
-                cls="import-fields",
+                cols_max=2,
+                cls="gap-6",
             ),
-            Button("Import selected files", cls=ButtonT.primary),
+            Button("Import selected files", cls=(ButtonT.primary, "self-start")),
             action=f"/events/{event_id}/import",
             method="post",
             enctype="multipart/form-data",
-            cls="stack",
+            cls=(FlexT.block, FlexT.column, "gap-6"),
         ),
     )
 

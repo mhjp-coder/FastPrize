@@ -3,19 +3,33 @@ from fasthtml.common import (
     Form,
     HTTPException,
     Li,
-    Section,
-    Small,
     Span,
     Strong,
 )
-from monsterui.franken import Button, ButtonT, Card, Input, Label, LabelT, UkIcon
+from monsterui.franken import (
+    Button,
+    ButtonT,
+    Card,
+    FlexT,
+    Grid,
+    Input,
+    Label,
+    LabelT,
+    Small,
+    TextT,
+    UkIcon,
+)
 
 from fastprize.store import InvalidPrizeNumber
 from fastprize.ui import (
     document,
     emphasized,
+    hstack,
     page_header,
+    record_actions,
+    record_body,
     record_list,
+    record_row,
     redirect_event,
     search_field,
     stat_card,
@@ -38,7 +52,11 @@ def _prize_title(prize: dict):
     number = prize.get("prize_number")
     if number is None:
         return name
-    return Div(Span(f"#{number}", cls="prize-number"), name, cls="prize-title")
+    return Div(
+        Span(f"#{number}", cls=(TextT.meta, TextT.bold, "shrink-0 tabular-nums")),
+        name,
+        cls=(FlexT.inline, FlexT.nowrap, "items-baseline gap-2"),
+    )
 
 
 def register_routes(rt, store):
@@ -133,7 +151,7 @@ def register_routes(rt, store):
                             value=prize["sponsor"],
                             aria_label="Prize sponsor",
                         ),
-                        Div(
+                        hstack(
                             Button("Save", cls=ButtonT.primary),
                             Button(
                                 "Cancel",
@@ -141,7 +159,6 @@ def register_routes(rt, store):
                                 onclick="cancelEdit(this)",
                                 cls=ButtonT.secondary,
                             ),
-                            cls="cluster",
                         ),
                         action=f"/events/{event_id}/prizes/{prize['id']}/edit",
                         method="post",
@@ -167,19 +184,19 @@ def register_routes(rt, store):
             )
             number = prize.get("prize_number")
             return Li(
-                Div(
-                    Div(
+                record_row(
+                    record_body(
                         Div(_prize_title(prize), data_read="1"),
                         Small(
                             prize["sponsor"] or "No sponsor listed",
                             data_read="1",
+                            cls=TextT.meta,
                         ),
                         *edit_fields,
-                        cls="record-main",
                     ),
-                    Div(*actions, *edit_button, cls="record-actions"),
-                    cls="record",
+                    record_actions(*edit_button, *actions),
                 ),
+                id=f"prize-{prize['id']}",
                 data_search=" ".join(
                     part
                     for part in (
@@ -195,10 +212,11 @@ def register_routes(rt, store):
             f"FastPrize | {event['name']} | Prizes",
             page_header("Prizes"),
             status_banner(status_message(status), status_tone(status)),
-            Section(
+            Grid(
                 stat_card(available_count, "available"),
                 stat_card(len(prizes), "total"),
-                cls="stat-row",
+                cols_max=2,
+                cls="gap-6",
             ),
             Card(
                 Form(
@@ -228,7 +246,6 @@ def register_routes(rt, store):
                     method="post",
                     cls="add-prize-form",
                 ),
-                body_cls="add-card",
             ),
             Card(
                 Div(

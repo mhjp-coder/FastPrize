@@ -19,6 +19,8 @@ def _test_client(app, *, login: bool = True):
             "test-admin@example.test", hash_password("test-password-123")
         )
     login_page = client.get("/login").text
+    assert "login-brand" in login_page
+    assert login_page.index("login-brand") < login_page.index("<h1")
     csrf_token = login_page.split('name="csrf" value="', 1)[1].split('"', 1)[0]
     client.post(
         "/login",
@@ -110,6 +112,16 @@ def test_event_workflow_and_live_display(tmp_path):
     assert 'data-key="font"' in home.text
     assert "uk-font-sm" in home.text
     assert "uk-font-base" in home.text
+    assert 'value="uk-theme-blue" data-hex="#2563eb" selected' in home.text
+    assert 'value="uk-radii-lg" selected' in home.text
+    assert 'value="uk-shadows-sm" selected' in home.text
+    assert 'value="uk-font-base" selected' in home.text
+    assert 'value="dark" data-icon="moon" selected' in home.text
+    assert '__FRANKEN__.theme || "uk-theme-blue"' in home.text
+    assert '__FRANKEN__.radii || "uk-radii-lg"' in home.text
+    assert '__FRANKEN__.shadows || "uk-shadows-sm"' in home.text
+    assert '__FRANKEN__.font || "uk-font-base"' in home.text
+    assert 'if (__FRANKEN__.mode === "light")' in home.text
     assert "<style" not in home.text.lower()
     assert "class-=" not in home.text
 
@@ -150,7 +162,11 @@ def test_event_workflow_and_live_display(tmp_path):
     assert "Import names and organizations." not in manage_page.text
     assert "Import prize names, numbers, and sponsors." not in manage_page.text
     assert "Name is required. Organization is optional." in manage_page.text
-    assert 'data-uk-tooltip="title: Name is required. Organization is optional. CSV columns: name, organization"' in manage_page.text
+    assert (
+        "data-uk-tooltip=\"title: Name is required. Organization is optional."
+        "&lt;br&gt;&lt;br&gt;CSV columns: name, organization\""
+        in manage_page.text
+    )
     assert "class=\"info-tip\"" not in manage_page.text
     assert (
         "Prize name is required. Sponsor and prize number are optional."
@@ -277,6 +293,18 @@ def test_event_workflow_and_live_display(tmp_path):
     assert "<strong>Northwind</strong>" in preview.text
     assert "Award winner" in preview.text
     assert "Redraw" in preview.text
+    award_button = next(
+        button
+        for button in re.findall(r"<button\b[^>]*>.*?</button>", preview.text, re.DOTALL)
+        if "Award winner" in button
+    )
+    close_button = next(
+        button
+        for button in re.findall(r"<button\b[^>]*>", preview.text)
+        if 'aria-label="Close"' in button
+    )
+    assert "autofocus" in award_button
+    assert "autofocus" not in close_button
 
     live_preview = client.get(f"/events/{event_id}/display/latest")
     assert live_preview.status_code == 200
@@ -318,6 +346,18 @@ def test_event_workflow_and_live_display(tmp_path):
     history_page = client.get(page_paths["history"])
     assert store.latest_draw(event_id)["entrant_name"] in history_page.text
     assert "Laptop" in history_page.text
+    awarded_prize = store.latest_draw(event_id)
+    assert (
+        f'/events/{event_id}/prizes#prize-{awarded_prize["prize_id"]}'
+        in history_page.text
+    )
+    assert f'datetime="{awarded_prize["created_at"]}"' in history_page.text
+    assert "history-time" in history_page.text
+    assert awarded_prize["created_at"].endswith("+00:00")
+    assert 'class="list-search"' in history_page.text
+    assert 'aria-label="Search draws"' in history_page.text
+    assert "draws completed" in history_page.text
+    assert f'id="prize-{prize_id}"' in prize_page.text
 
 
 def test_undo_award_confirms_then_clears_history(tmp_path):
@@ -378,7 +418,8 @@ def test_empty_history_page_does_not_offer_start_draw_link(tmp_path):
 
     page = client.get(f"/events/{event_id}/history").text
 
-    assert '<p class="empty-note">Completed draws will appear here.</p>' in page
+    assert "uk-placeholder" in page
+    assert "Completed draws will appear here." in page
     assert "Start a draw" not in page
 
 
@@ -615,8 +656,8 @@ def test_admin_can_sign_in_and_add_another_account(tmp_path):
     accounts = client.get("/admin/accounts")
     assert accounts.status_code == 200
     assert "test-admin@example.test" in accounts.text
-    assert 'id="admin-counts"' in accounts.text
-    assert 'class="admin-grid"' in accounts.text
+    assert "total," not in accounts.text
+    assert "md:grid-cols-2" in accounts.text
     created = client.post(
         "/admin/accounts",
         data={"email": "second@example.test", "password": "second-admin-password"},
@@ -624,7 +665,7 @@ def test_admin_can_sign_in_and_add_another_account(tmp_path):
     assert "Admin account created." in created.text
     second = store.get_admin_by_email("second@example.test")
     assert second is not None
-    assert 'class="status-toggle"' in created.text
+    assert "admin-enabled-" in created.text
     assert 'aria-label="Delete"' in created.text
     assert ">Disable<" not in created.text
     disabled = client.post(

@@ -11,12 +11,10 @@ from fasthtml.common import (
     RedirectResponse,
     Request,
     Script,
-    Section,
-    Small,
     Strong,
     to_xml,
 )
-from monsterui.franken import H2, Button, ButtonT, Card
+from monsterui.franken import H2, Button, ButtonT, Card, Grid, Small, TextT
 from starlette.responses import HTMLResponse
 
 from fastprize.ui import (
@@ -27,6 +25,8 @@ from fastprize.ui import (
     live_quote,
     page_header,
     paged_list,
+    record_body,
+    record_row,
     redirect_event,
     search_field,
     stat_card,
@@ -152,18 +152,16 @@ def register_routes(rt, store):
                 )
         prize_rows = [
             Li(
-                Div(
-                    Div(
+                record_row(
+                    record_body(
                         Strong(prize["prize_name"]),
-                        Small(prize["sponsor"] or "No sponsor listed"),
-                        cls="record-main",
+                        Small(prize["sponsor"] or "No sponsor listed", cls=TextT.meta),
                     ),
                     Form(
-                        Button("Select winner", cls=ButtonT.primary),
+                        Button("Draw!", cls=ButtonT.primary),
                         action=f"/events/{event_id}/draws/{prize['id']}/preview",
                         method="post",
                     ),
-                    cls="record",
                 ),
                 data_search=f"{prize['prize_name']} {prize['sponsor'] or ''}".lower(),
             )
@@ -174,10 +172,11 @@ def register_routes(rt, store):
             f"FastPrize | {event['name']} | Draw",
             page_header("Draw a prize"),
             status_banner(message, status_tone(status)),
-            Section(
+            Grid(
                 stat_card(eligible_count, "eligible entrants"),
                 stat_card(len(available_prizes), "prizes remaining"),
-                cls="stat-row",
+                cols_max=2,
+                cls="gap-6",
             ),
             preview_modal if preview_modal else "",
             Card(

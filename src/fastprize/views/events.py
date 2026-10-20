@@ -1,24 +1,38 @@
 from fasthtml.common import (
     A,
+    Div,
     HTTPException,
     Label,
     RedirectResponse,
     Request,
-    Section,
     Span,
 )
-from monsterui.franken import H2, Button, ButtonT, Card, Form, Input, P, Switch
+from monsterui.franken import (
+    H2,
+    Button,
+    ButtonT,
+    Card,
+    FlexT,
+    Form,
+    Grid,
+    Input,
+    P,
+    Placeholder,
+    Switch,
+)
 
 from fastprize.ui import (
     EVENT_SELECTION_COOKIE,
     document,
     emphasized,
+    hstack,
     page_header,
     redirect_event,
     stat_card,
     status_banner,
     status_message,
     status_tone,
+    vstack,
 )
 from fastprize.views.imports import import_form
 
@@ -38,21 +52,19 @@ def _event_card(event: dict):
     return A(
         Card(H2(event["name"])),
         href=f"/events/{event['id']}",
-        cls="block-link",
+        cls="block no-underline text-inherit",
     )
 
 
 def _events_list(events: list[dict]):
     event_links = [_event_card(event) for event in events]
-    return Section(
+    return vstack(
         H2("Your events"),
-        Section(*event_links, cls="stats")
+        Grid(*event_links, cols=2, cls="gap-6")
         if event_links
-        else P(
-            "No events yet. Create one to start adding entrants and prizes.",
-            cls="empty-note",
+        else Placeholder(
+            P("No events yet. Create one to start adding entrants and prizes."),
         ),
-        cls="stack",
     )
 
 
@@ -78,7 +90,7 @@ def register_routes(rt, store):
             prizes = store.prizes(selected_event["id"])
             eligible_count = sum(entrant["eligible"] for entrant in entrants)
             available_count = sum(not prize["drawn"] for prize in prizes)
-            selected_panel = Section(
+            selected_panel = vstack(
                 Card(
                     P("Current event", cls="nav-label"),
                     H2(selected_event["name"]),
@@ -97,12 +109,12 @@ def register_routes(rt, store):
                         ),
                     ),
                 ),
-                Section(
-                    Card(H2(str(eligible_count)), P("eligible entrants")),
-                    Card(H2(str(available_count)), P("prizes available")),
-                    cls="stats",
+                Grid(
+                    Card(H2(str(eligible_count)), P("eligible entrants"), cls="h-full"),
+                    Card(H2(str(available_count)), P("prizes available"), cls="h-full"),
+                    cols=2,
+                    cls="gap-6",
                 ),
-                cls="stack",
             )
         return document(
             "FastPrize",
@@ -126,7 +138,7 @@ def register_routes(rt, store):
             ),
             _events_list(store.list_events()),
             Form(
-                DivActions(
+                Div(
                     Input(
                         name="name",
                         placeholder="Conference or event name",
@@ -134,7 +146,7 @@ def register_routes(rt, store):
                         type="text",
                     ),
                     Button("Create event", cls=ButtonT.primary),
-                    cls="form-row",
+                    cls="grid grid-cols-1 items-end gap-6 md:grid-cols-2",
                 ),
                 action="/events",
                 method="post",
@@ -166,10 +178,11 @@ def register_routes(rt, store):
             f"FastPrize | {event['name']} | Events",
             page_header(event["name"]),
             status_banner(message, status_tone(status)),
-            Section(
+            Grid(
                 stat_card(eligible_count, "eligible entrants"),
                 stat_card(available_count, "prizes available"),
-                cls="stat-row",
+                cols_max=2,
+                cls="gap-6",
             ),
             Card(
                 H2("Winner eligibility"),
@@ -186,7 +199,7 @@ def register_routes(rt, store):
                         ),
                         Span("Yes" if event["remove_winners"] else "No"),
                         fr="remove_winners",
-                        cls="eligibility-toggle",
+                        cls=(FlexT.inline, FlexT.middle, "w-fit cursor-pointer gap-3"),
                     ),
                     action=f"/events/{event_id}/settings",
                     method="post",
@@ -247,7 +260,5 @@ def register_routes(rt, store):
         return response
 
 
-def DivActions(*children, cls="cluster"):
-    from fasthtml.common import Div
-
-    return Div(*children, cls=cls)
+def DivActions(*children, cls=()):
+    return hstack(*children, cls=cls)
