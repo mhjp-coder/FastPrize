@@ -1,7 +1,5 @@
 # syntax=docker/dockerfile:1
-FROM public.ecr.aws/docker/library/python:3.14-slim
-
-COPY --from=ghcr.io/astral-sh/uv:0.12.22 /uv /usr/local/bin/uv
+FROM ghcr.io/astral-sh/uv:0.12.22-python3.14-trixie-slim
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
