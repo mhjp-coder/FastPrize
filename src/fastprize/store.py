@@ -302,7 +302,12 @@ class PrizeDrawStore:
     def delete_event(self, event_id: int) -> bool:
         if self.get_event(event_id) is None:
             return False
-        self.db.t.events.delete(event_id)
+        with self.db.conn:
+            self.db.t.draw_previews.delete_where("event_id = ?", (event_id,))
+            self.db.t.draws.delete_where("event_id = ?", (event_id,))
+            self.db.t.prizes.delete_where("event_id = ?", (event_id,))
+            self.db.t.entrants.delete_where("event_id = ?", (event_id,))
+            self.db.t.events.delete(event_id)
         return True
 
     def set_remove_winners(self, event_id: int, remove_winners: bool) -> None:
@@ -566,12 +571,33 @@ class PrizeDrawStore:
         )
         return len(prizes)
 
-    def clear_all_event_data(self, event_id: int) -> tuple[int, int]:
-        self.db.t.draw_previews.delete_where(
+    def clear_history(self, event_id: int) -> int:
+        draws = self.draw_history(event_id)
+        self.db.t.draws.delete_where(
             "event_id = ?",
             (event_id,),
         )
-        return self.clear_entrants(event_id), self.clear_prizes(event_id)
+        return len(draws)
+
+    def clear_event_data(
+        self,
+        event_id: int,
+        *,
+        entrants: bool = False,
+        prizes: bool = False,
+        history: bool = False,
+    ) -> None:
+        with self.db.conn:
+            if history:
+                self.clear_history(event_id)
+            if entrants:
+                self.clear_entrants(event_id)
+            if prizes:
+                self.db.t.draw_previews.delete_where(
+                    "event_id = ?",
+                    (event_id,),
+                )
+                self.clear_prizes(event_id)
 
     def preview_draw(
         self,

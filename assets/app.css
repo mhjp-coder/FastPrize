@@ -948,6 +948,21 @@ button.nav-link {
     background: hsl(var(--muted));
 }
 
+.confirm-choices {
+    display: flex;
+    flex-direction: column;
+    gap: 0.7rem;
+    margin-bottom: 1.35rem;
+}
+
+.confirm-choice {
+    display: flex;
+    align-items: center;
+    gap: 0.7rem;
+    width: fit-content;
+    cursor: pointer;
+}
+
 .draw-dialog p {
     margin: 0;
     line-height: 1.55;

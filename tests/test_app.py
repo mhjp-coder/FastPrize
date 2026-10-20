@@ -533,8 +533,23 @@ def test_operator_can_clear_all_entrants_and_prizes(tmp_path):
         f"/events/{event_id}/prizes", data={"name": "Travel", "sponsor": "Contoso"}
     )
 
-    reset_page = client.post(f"/events/{event_id}/clear-data")
-    assert "Cleared all entrants and prizes." in reset_page.text
+    manage_page = client.get(f"/events/{event_id}").text
+    assert 'data-confirm-choices="clear"' in manage_page
+    assert 'data-confirm-label="Confirm"' in manage_page
+    assert 'name="clear_entrants"' in manage_page
+    assert 'name="clear_prizes"' in manage_page
+    assert 'name="clear_history"' in manage_page
+
+    unchanged = client.post(f"/events/{event_id}/clear-data")
+    assert "Choose entrants, prizes, or history to clear." in unchanged.text
+    assert len(store.entrants(event_id)) == 2
+    assert len(store.prizes(event_id)) == 2
+
+    reset_page = client.post(
+        f"/events/{event_id}/clear-data",
+        data={"clear_entrants": "1", "clear_prizes": "1"},
+    )
+    assert "Cleared entrants and prizes." in reset_page.text
     assert store.entrants(event_id) == []
     assert store.prizes(event_id) == []
 
@@ -545,22 +560,43 @@ def test_operator_can_delete_an_event(tmp_path):
     kept_id = store.create_event("Keep")
     event_id = store.create_event("Awards")
     store.add_entrant(event_id, "Ada Lovelace", "Engine Co")
-    store.add_prize(event_id, "Laptop", "Northwind")
+    laptop = store.add_prize(event_id, "Laptop", "Northwind")
+    store.draw(event_id, laptop, chooser=lambda entrants: entrants[0])
+    travel = store.add_prize(event_id, "Travel", "Contoso")
+    store.save_preview(
+        event_id,
+        travel,
+        {"id": None, "name": "Grace Hopper", "organization": "Naval Lab"},
+        {"prize_name": "Travel", "sponsor": "Contoso"},
+    )
 
     manage_page = client.get(f"/events/{event_id}")
     assert "Live Display" not in manage_page.text
     assert f'data-confirm-action="/events/{event_id}/delete"' in manage_page.text
+    assert 'data-confirm-choices="delete"' in manage_page.text
+    assert 'name="delete_event"' in manage_page.text
     assert "&lt;strong&gt;Awards&lt;/strong&gt;" in manage_page.text
     assert 'class="dialog-title"' in manage_page.text
     assert "Delete event" in manage_page.text
 
-    events_page = client.post(f"/events/{event_id}/delete")
+    kept = client.post(f"/events/{event_id}/delete")
+    assert "Check the box to delete this event and all of its data." in kept.text
+    assert store.get_event(event_id) is not None
+    assert store.entrants(event_id)
+    assert store.draw_history(event_id)
+
+    events_page = client.post(
+        f"/events/{event_id}/delete",
+        data={"delete_event": "1"},
+    )
     assert events_page.status_code == 200
     assert "Awards" not in events_page.text
     assert "Keep" in events_page.text
     assert store.get_event(event_id) is None
     assert store.entrants(event_id) == []
     assert store.prizes(event_id) == []
+    assert store.draw_history(event_id) == []
+    assert store.latest_preview(event_id) is None
     assert client.cli.cookies.get("fastprize_event_id") is None
     assert "Awards" not in client.get("/").text
     assert store.get_event(kept_id) is not None

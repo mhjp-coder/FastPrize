@@ -210,15 +210,17 @@ def register_routes(rt, store):
                 H2("Data management"),
                 DivActions(
                     Button(
-                        "Clear all entrants and prizes",
+                        "Clear event data",
                         type="button",
                         cls=ButtonT.destructive,
                         data_confirm=(
-                            "Clear all entrants and prizes from "
-                            f"{emphasized(event['name'])}? This cannot be undone."
+                            "Choose what to clear from "
+                            f"{emphasized(event['name'])}. This cannot be undone."
                         ),
+                        data_confirm_title="Clear event data",
                         data_confirm_action=f"/events/{event_id}/clear-data",
-                        data_confirm_label="Clear all",
+                        data_confirm_label="Confirm",
+                        data_confirm_choices="clear",
                         onclick="confirmDelete(this)",
                     ),
                     Button(
@@ -229,8 +231,10 @@ def register_routes(rt, store):
                             f"Delete {emphasized(event['name'])}? This removes the event and its "
                             "entrants, prizes, and draw history. This cannot be undone."
                         ),
+                        data_confirm_title="Delete event",
                         data_confirm_action=f"/events/{event_id}/delete",
                         data_confirm_label="Delete event",
+                        data_confirm_choices="delete",
                         onclick="confirmDelete(this)",
                     ),
                 ),
@@ -248,12 +252,33 @@ def register_routes(rt, store):
         return redirect_event(event_id, "settings-updated")
 
     @rt("/events/{event_id}/clear-data", methods=["POST"])
-    def clear_all_data(event_id: int):
-        store.clear_all_event_data(event_id)
-        return redirect_event(event_id, "data-cleared")
+    async def clear_event_data(event_id: int, req: Request):
+        form = await req.form()
+        selected = [
+            name
+            for name, field in (
+                ("entrants", "clear_entrants"),
+                ("prizes", "clear_prizes"),
+                ("history", "clear_history"),
+            )
+            if "1" in {str(value) for value in form.getlist(field)}
+        ]
+        if not selected:
+            return redirect_event(event_id, "clear-selection")
+        store.clear_event_data(
+            event_id,
+            entrants="entrants" in selected,
+            prizes="prizes" in selected,
+            history="history" in selected,
+        )
+        return redirect_event(event_id, "data-cleared:" + ",".join(selected))
 
     @rt("/events/{event_id}/delete", methods=["POST"])
-    def delete_event(event_id: int):
+    async def delete_event(event_id: int, req: Request):
+        form = await req.form()
+        confirmed = "1" in {str(value) for value in form.getlist("delete_event")}
+        if not confirmed:
+            return redirect_event(event_id, "delete-unconfirmed")
         store.delete_event(event_id)
         response = RedirectResponse("/events", status_code=303)
         response.delete_cookie(EVENT_SELECTION_COOKIE, path="/")

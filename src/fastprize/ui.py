@@ -19,6 +19,7 @@ from fasthtml.common import (
     Head,
     Html,
     Input,
+    Label,
     Link,
     Main,
     Meta,
@@ -113,6 +114,8 @@ WARNING_STATUSES = {
     "no-file",
     "prize-locked",
     "award-missing",
+    "clear-selection",
+    "delete-unconfirmed",
 }
 ERROR_STATUSES = {
     "invalid-entrant",
@@ -131,7 +134,8 @@ STATUS_MESSAGES = {
     "prize-added": "Prize added.",
     "prize-updated": "Prize updated.",
     "prize-removed": "Prize removed.",
-    "data-cleared": "Cleared all entrants and prizes.",
+    "clear-selection": "Choose entrants, prizes, or history to clear.",
+    "delete-unconfirmed": "Check the box to delete this event and all of its data.",
     "settings-updated": "Winner eligibility setting updated.",
     "entrants-imported": "Entrant CSV imported.",
     "prizes-imported": "Prize CSV imported.",
@@ -189,7 +193,22 @@ def status_tone(status: str) -> str:
     return "info"
 
 
+def _cleared_message(status: str) -> str:
+    labels = [
+        part
+        for part in status.removeprefix("data-cleared:").split(",")
+        if part in {"entrants", "prizes", "history"}
+    ]
+    if len(labels) == 1:
+        return f"Cleared {labels[0]}."
+    if len(labels) == 2:
+        return f"Cleared {labels[0]} and {labels[1]}."
+    return f"Cleared {', '.join(labels[:-1])}, and {labels[-1]}."
+
+
 def status_message(status: str) -> str:
+    if status.startswith("data-cleared:"):
+        return _cleared_message(status)
     if status.startswith("draw-complete:"):
         awarded = json.loads(status.removeprefix("draw-complete:"))
         name = awarded["name"]
@@ -423,8 +442,33 @@ function confirmDelete(button) {
     const title = document.getElementById("confirm-delete-title");
     if (title) title.textContent = button.dataset.confirmTitle || "Confirm removal";
     const form = document.getElementById("confirm-delete-form");
+    const submit = document.getElementById("confirm-delete-submit");
+    const choiceGroups = {
+        clear: document.getElementById("confirm-delete-choices"),
+        delete: document.getElementById("confirm-delete-ack"),
+    };
+    const choiceKey = button.dataset.confirmChoices || "";
+    let boxes = [];
+    Object.entries(choiceGroups).forEach(([key, group]) => {
+        if (!group) return;
+        const active = key === choiceKey;
+        group.hidden = !active;
+        const inputs = [...group.querySelectorAll("input[type=checkbox]")];
+        inputs.forEach((box) => {
+            box.checked = false;
+            box.disabled = !active;
+        });
+        if (active) boxes = inputs;
+    });
     form.action = button.dataset.confirmAction;
-    form.querySelector("button").textContent = button.dataset.confirmLabel || "Remove";
+    submit.textContent = button.dataset.confirmLabel || "Remove";
+    function syncConfirmButton() {
+        submit.disabled = boxes.length > 0 && !boxes.some((box) => box.checked);
+    }
+    boxes.forEach((box) => {
+        box.onchange = syncConfirmButton;
+    });
+    syncConfirmButton();
     const extra = form.querySelector("[data-extra]");
     if (extra) extra.remove();
     if (button.dataset.confirmField) {
@@ -883,23 +927,52 @@ def emphasized(value: str) -> str:
     return f"<strong>{escape(value)}</strong>"
 
 
+def _clear_choice(name: str, label: str):
+    return Label(
+        Input(type="checkbox", name=name, value="1"),
+        Span(label),
+        cls="confirm-choice",
+    )
+
+
 def confirm_dialog():
     return Dialog(
         H2("Confirm removal", id="confirm-delete-title", cls="dialog-title"),
         P(id="confirm-delete-message"),
-        Div(
-            Form(
-                ThemeButton("Remove", cls=ButtonT.destructive),
-                id="confirm-delete-form",
-                method="post",
+        Form(
+            Div(
+                _clear_choice("clear_entrants", "Entrants"),
+                _clear_choice("clear_prizes", "Prizes"),
+                _clear_choice("clear_history", "History"),
+                id="confirm-delete-choices",
+                cls="confirm-choices",
+                hidden=True,
             ),
-            ThemeButton(
-                "Cancel",
-                type="button",
-                onclick="this.closest('dialog').close()",
-                cls=ButtonT.secondary,
+            Div(
+                _clear_choice(
+                    "delete_event",
+                    "Delete this event and all of its data",
+                ),
+                id="confirm-delete-ack",
+                cls="confirm-choices",
+                hidden=True,
             ),
-            cls=(FlexT.block, FlexT.row, FlexT.wrap, FlexT.middle, "gap-3"),
+            Div(
+                ThemeButton(
+                    "Remove",
+                    id="confirm-delete-submit",
+                    cls=ButtonT.destructive,
+                ),
+                ThemeButton(
+                    "Cancel",
+                    type="button",
+                    onclick="this.closest('dialog').close()",
+                    cls=ButtonT.secondary,
+                ),
+                cls=(FlexT.block, FlexT.row, FlexT.wrap, FlexT.middle, "gap-3"),
+            ),
+            id="confirm-delete-form",
+            method="post",
         ),
         id="confirm-delete",
         cls="draw-dialog",

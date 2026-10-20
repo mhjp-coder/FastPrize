@@ -166,19 +166,30 @@ def test_draw_snapshots_survive_entrant_removal(store):
     assert latest_draw["entrant_name"] == "Grace Hopper"
 
 
-def test_clear_all_event_data_removes_entrants_and_prizes(store):
+def test_clear_event_data_removes_only_the_selected_records(store):
     event_id = store.create_event("Data reset")
     store.add_entrant(event_id, "Ada Lovelace", "Engine Co")
     store.add_entrant(event_id, "Grace Hopper", "Naval Lab")
-    store.add_prize(event_id, "Laptop", "Northwind")
+    laptop = store.add_prize(event_id, "Laptop", "Northwind")
     store.add_prize(event_id, "Travel", "Contoso")
+    store.draw(event_id, laptop, chooser=lambda entrants: entrants[0])
 
-    entrants_removed, prizes_removed = store.clear_all_event_data(event_id)
+    store.clear_event_data(event_id, history=True)
 
-    assert entrants_removed == 2
-    assert prizes_removed == 2
+    assert store.draw_history(event_id) == []
+    assert len(store.entrants(event_id)) == 2
+    assert len(store.prizes(event_id)) == 2
+
+    store.clear_event_data(event_id, entrants=True)
+
     assert store.entrants(event_id) == []
+    assert len(store.prizes(event_id)) == 2
+
+    store.add_entrant(event_id, "Ada Lovelace", "Engine Co")
+    store.clear_event_data(event_id, prizes=True)
+
     assert store.prizes(event_id) == []
+    assert store.entrants(event_id)
 
 
 def test_legacy_prize_name_column_is_migrated(tmp_path):
