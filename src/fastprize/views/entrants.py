@@ -149,8 +149,8 @@ def register_routes(rt, store):
             page_header("Entrants"),
             status_banner(status_message(status), status_tone(status)),
             Grid(
-                stat_card(len(entrants), "total"),
                 stat_card(eligible_count, "eligible"),
+                stat_card(len(entrants), "total"),
                 cols_max=2,
                 cls="gap-6",
             ),

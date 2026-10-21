@@ -93,7 +93,7 @@ NAV_ITEMS = (
     ("accounts", "Admins", "shield", None),
 )
 
-MOBILE_KEYS = ("draw", "display", "entrants", "prizes", "overview")
+MOBILE_KEYS = ("draw", "display", "entrants", "prizes", "history")
 
 THEME_SCRIPT = """
 const htmlElement = document.documentElement;
@@ -572,7 +572,13 @@ def _nav_link(key: str, label: str, icon: str, event_id: int | None, active_link
     )
 
 
-def _grouped_nav(event_id: int | None, active_link: str, keys: tuple[str, ...] | None):
+def _grouped_nav(
+    event_id: int | None,
+    active_link: str,
+    keys: tuple[str, ...] | None,
+    *,
+    skip_labels: frozenset[str] = frozenset(),
+):
     items = [
         item
         for item in NAV_ITEMS
@@ -592,7 +598,11 @@ def _grouped_nav(event_id: int | None, active_link: str, keys: tuple[str, ...] |
         groups.append((current_label, bucket))
     rendered = []
     for group, links in groups:
-        label = {"show": "Show", "setup": "Setup"}.get(group, "")
+        label = (
+            ""
+            if group in skip_labels
+            else {"show": "Show", "setup": "Setup"}.get(group, "")
+        )
         rendered.append(
                 Div(
                 P(label, cls="nav-label") if label else "",
@@ -664,9 +674,13 @@ def document(
         body = (Main(*content, cls="login-screen"),)
     else:
         brand = A(brand_mark(), Span("FastPrize"), href="/", cls="brand")
+        nav_by_key = {
+            key: (label, icon) for key, label, icon, _group in NAV_ITEMS
+        }
         secondary_keys = tuple(
             key for key, *_rest in NAV_ITEMS if key not in MOBILE_KEYS
         )
+        mobile_bar_keys = MOBILE_KEYS if event_id is not None else ("events",)
         body = (
             Div(
                 Nav(
@@ -694,10 +708,8 @@ def document(
                 ),
                 Nav(
                     *(
-                        _nav_link(key, label, icon, event_id, active_link)
-                        for key, label, icon, _group in NAV_ITEMS
-                        if (event_id is not None and key in MOBILE_KEYS)
-                        or (event_id is None and key == "events")
+                        _nav_link(key, *nav_by_key[key], event_id, active_link)
+                        for key in mobile_bar_keys
                     ),
                     cls="mobile-bar",
                     aria_label="Primary",
@@ -732,7 +744,16 @@ def DetailsMenu(event_id: int | None, active_link: str, keys: tuple[str, ...]):
         cls="hamburger",
         aria_hidden="true",
     )
-    groups = _grouped_nav(event_id, active_link, keys) if event_id is not None else []
+    groups = (
+        _grouped_nav(
+            event_id,
+            active_link,
+            keys,
+            skip_labels=frozenset({"show", "setup"}),
+        )
+        if event_id is not None
+        else []
+    )
     return Details(
         Summary(bar, aria_label="Menu", cls="menu-toggle"),
         Div(
