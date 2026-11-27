@@ -1,11 +1,14 @@
 import csv
+import hashlib
+import hmac
 import io
 import json
 import os
 import secrets
 from collections.abc import Callable
+from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from apsw import ConstraintError
@@ -14,6 +17,20 @@ from fastlite import database
 from fastprize.slug import public_event_slug
 
 DEFAULT_DATABASE_PATH = Path(__file__).resolve().parents[2] / "fastprize.sqlite3"
+PASSWORD_RESET_TTL = timedelta(minutes=30)
+DEMO_EVENT_NAME = "Demo event"
+
+
+def sha256_token(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+class SetupClaimError(Exception):
+    """The setup token is missing, wrong, or already spent."""
+
+
+class _TokenRejected(Exception):
+    """A password-reset token cannot be spent."""
 
 
 def get_database_path() -> Path:
@@ -99,6 +116,23 @@ class PrizeDrawStore:
                 sponsor TEXT NOT NULL,
                 created_at TEXT NOT NULL,
                 UNIQUE(event_id, prize_id)
+            )""",
+            """CREATE TABLE IF NOT EXISTS app_meta (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )""",
+            """CREATE TABLE IF NOT EXISTS instance_setup (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                token_hash TEXT,
+                claimed_at TEXT
+            )""",
+            """CREATE TABLE IF NOT EXISTS password_reset_tokens (
+                id INTEGER PRIMARY KEY,
+                admin_id INTEGER NOT NULL REFERENCES admins(id) ON DELETE CASCADE,
+                token_hash TEXT NOT NULL UNIQUE,
+                expires_at TEXT NOT NULL,
+                used_at TEXT,
+                created_at TEXT NOT NULL
             )""",
         )
         for statement in statements:
@@ -222,6 +256,12 @@ class PrizeDrawStore:
                 "password_hash": password_hash,
                 "auth_version": admin["auth_version"] + 1,
             }
+        )
+        self.db.q(
+            """UPDATE password_reset_tokens
+               SET used_at = ?
+               WHERE admin_id = ? AND used_at IS NULL""",
+            (datetime.now(UTC).isoformat(timespec="seconds"), admin_id),
         )
         return True
 
@@ -718,3 +758,205 @@ class PrizeDrawStore:
             as_cls=False,
         )
         return previews[0] if previews else None
+
+    @contextmanager
+    def _immediate(self):
+        conn = self.db.conn
+        if conn.in_transaction:
+            yield
+            return
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            yield
+        except Exception:
+            if conn.in_transaction:
+                conn.execute("ROLLBACK")
+            raise
+        else:
+            if conn.in_transaction:
+                conn.execute("COMMIT")
+
+    def database_ready(self) -> bool:
+        rows = self.db.q("SELECT 1 AS ready")
+        return bool(rows and rows[0]["ready"] == 1)
+
+    def get_meta(self, key: str) -> str | None:
+        rows = self.db.q("SELECT value FROM app_meta WHERE key = ?", (key,))
+        return rows[0]["value"] if rows else None
+
+    def set_meta(self, key: str, value: str) -> None:
+        self.db.q(
+            """INSERT INTO app_meta (key, value) VALUES (?, ?)
+               ON CONFLICT(key) DO UPDATE SET value = excluded.value""",
+            (key, value),
+        )
+
+    def _setup_row(self) -> dict | None:
+        rows = self.db.q(
+            "SELECT id, token_hash, claimed_at FROM instance_setup WHERE id = 1"
+        )
+        return rows[0] if rows else None
+
+    def setup_is_pending(self) -> bool:
+        row = self._setup_row()
+        return bool(
+            row
+            and row["token_hash"]
+            and not row["claimed_at"]
+            and self.admin_count() == 0
+        )
+
+    def setup_status(self) -> str:
+        row = self._setup_row()
+        if row and row["claimed_at"]:
+            return "claimed"
+        if self.setup_is_pending():
+            return "pending"
+        return "inactive"
+
+    def ensure_pending_setup(self, token_hash: str) -> None:
+        with self._immediate():
+            row = self._setup_row()
+            if row is None:
+                self.db.q(
+                    """INSERT INTO instance_setup (id, token_hash, claimed_at)
+                       VALUES (1, ?, NULL)""",
+                    (token_hash,),
+                )
+                return
+            if row["claimed_at"]:
+                return
+            current = row["token_hash"] or ""
+            if len(current) == len(token_hash) and hmac.compare_digest(
+                current, token_hash
+            ):
+                return
+            self.db.q(
+                """UPDATE instance_setup
+                   SET token_hash = ?
+                   WHERE id = 1 AND claimed_at IS NULL""",
+                (token_hash,),
+            )
+
+    def retire_unclaimed_setup(self) -> None:
+        row = self._setup_row()
+        if row is None or row["claimed_at"]:
+            return
+        self.db.q(
+            """UPDATE instance_setup
+               SET token_hash = NULL, claimed_at = ?
+               WHERE id = 1 AND claimed_at IS NULL""",
+            (datetime.now(UTC).isoformat(timespec="seconds"),),
+        )
+
+    def claim_setup(self, token: str, email: str, password_hash: str) -> dict:
+        presented = sha256_token(token.strip())
+        now = datetime.now(UTC).isoformat(timespec="seconds")
+        with self._immediate():
+            row = self._setup_row()
+            current = (row or {}).get("token_hash") or ""
+            if (
+                row is None
+                or row["claimed_at"]
+                or self.admin_count()
+                or not current
+                or len(current) != len(presented)
+                or not hmac.compare_digest(current, presented)
+            ):
+                raise SetupClaimError
+            admin = self.create_admin(email, password_hash)
+            self.db.q(
+                """UPDATE instance_setup
+                   SET token_hash = NULL, claimed_at = ?
+                   WHERE id = 1 AND claimed_at IS NULL AND token_hash = ?""",
+                (now, current),
+            )
+            if self.db.conn.changes() != 1:
+                raise SetupClaimError
+            return admin
+
+    @staticmethod
+    def _reset_subject(email: str) -> str:
+        return "password-reset:" + PrizeDrawStore.normalize_admin_email(email)
+
+    def password_reset_is_limited(self, email: str, now: float) -> bool:
+        return self.admin_login_is_limited(self._reset_subject(email), now)
+
+    def record_password_reset_attempt(self, email: str, now: float) -> None:
+        self.record_admin_login_failure(self._reset_subject(email), now)
+
+    def issue_password_reset(self, admin_id: int, now: datetime | None = None) -> tuple[str, str]:
+        moment = now or datetime.now(UTC)
+        token = secrets.token_urlsafe(32)
+        digest = sha256_token(token)
+        created = moment.isoformat(timespec="seconds")
+        expires = (moment + PASSWORD_RESET_TTL).isoformat(timespec="seconds")
+        with self._immediate():
+            self.db.q(
+                """UPDATE password_reset_tokens
+                   SET used_at = ?
+                   WHERE admin_id = ? AND used_at IS NULL""",
+                (created, admin_id),
+            )
+            self.db.q(
+                """INSERT INTO password_reset_tokens
+                   (admin_id, token_hash, expires_at, created_at)
+                   VALUES (?, ?, ?, ?)""",
+                (admin_id, digest, expires, created),
+            )
+            token_id = self.db.q("SELECT last_insert_rowid() AS id")[0]["id"]
+        return token, f"password-reset/{token_id}"
+
+    def reset_password_with_token(self, token: str, password_hash: str) -> bool:
+        presented = sha256_token(token.strip())
+        now = datetime.now(UTC)
+        stamp = now.isoformat(timespec="seconds")
+        try:
+            with self._immediate():
+                rows = self.db.q(
+                    """SELECT id, admin_id, expires_at, used_at
+                       FROM password_reset_tokens
+                       WHERE token_hash = ?""",
+                    (presented,),
+                )
+                if len(rows) != 1 or rows[0]["used_at"]:
+                    raise _TokenRejected
+                expires = datetime.fromisoformat(rows[0]["expires_at"])
+                if expires.tzinfo is None:
+                    expires = expires.replace(tzinfo=UTC)
+                if expires <= now:
+                    raise _TokenRejected
+                self.db.q(
+                    """UPDATE password_reset_tokens
+                       SET used_at = ?
+                       WHERE id = ? AND used_at IS NULL""",
+                    (stamp, rows[0]["id"]),
+                )
+                if self.db.conn.changes() != 1:
+                    raise _TokenRejected
+                if not self.update_admin_password(rows[0]["admin_id"], password_hash):
+                    raise _TokenRejected
+        except _TokenRejected:
+            return False
+        return True
+
+    def seed_demo_event(self, entrants_csv: str, prizes_csv: str) -> bool:
+        """Import demo entrants and prizes once. Return True when a new event is created."""
+        if self.get_meta("dummy_data_seeded"):
+            return False
+        with self._immediate():
+            if self.get_meta("dummy_data_seeded"):
+                return False
+            if self.list_events():
+                self.set_meta("dummy_data_seeded", "skipped")
+                return False
+            event_id = self.create_event(DEMO_EVENT_NAME)
+            entrants = self.import_entrants(event_id, entrants_csv)
+            prizes = self.import_prizes(event_id, prizes_csv)
+            if entrants.errors or prizes.errors or entrants.added == 0 or prizes.added == 0:
+                raise RuntimeError("Dummy data import failed")
+            self.set_meta(
+                "dummy_data_seeded",
+                datetime.now(UTC).isoformat(timespec="seconds"),
+            )
+        return True

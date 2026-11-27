@@ -41,6 +41,8 @@ from fasthtml.components import Uk_theme_switcher
 from monsterui.franken import Button as ThemeButton
 from monsterui.franken import ButtonT, FlexT, Placeholder, TextT, UkIcon
 
+from fastprize.config import billing_url
+
 EVENT_SELECTION_COOKIE = "fastprize_event_id"
 TECHNOLOGY_QUOTES = tuple(
     line.strip()
@@ -649,6 +651,16 @@ def record_actions(*children, **kwargs):
     )
 
 
+def billing_anchor(cls: str = "billing-link"):
+    return A(
+        "Billing",
+        href=billing_url(),
+        cls=cls,
+        target="_blank",
+        rel="noopener noreferrer",
+    )
+
+
 def brand_mark():
     svg = (
         Path(__file__).resolve().parents[2] / "assets" / "fastprize-favicon.svg"
@@ -687,6 +699,7 @@ def document(
                     brand,
                     P(event_name or "Choose an event", cls="nav-label"),
                     *_grouped_nav(event_id, active_link, None),
+                    billing_anchor(cls="nav-link billing-link"),
                     Div(
                         Div(theme_picker(), cls="sidebar-theme"),
                         Form(
@@ -759,6 +772,7 @@ def DetailsMenu(event_id: int | None, active_link: str, keys: tuple[str, ...]):
         Div(
             *groups,
             Div(
+                billing_anchor(cls="nav-link billing-link"),
                 Form(
                     ThemeButton("Sign out", type="submit", cls=ButtonT.ghost),
                     action="/logout",
