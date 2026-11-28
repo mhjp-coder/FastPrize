@@ -1,7 +1,9 @@
 import hmac
+import logging
 import time
+from urllib.parse import quote
 
-from fasthtml.common import Div, Form, Label, P, RedirectResponse, Request, Span
+from fasthtml.common import A, Div, Form, Label, P, RedirectResponse, Request, Span
 from monsterui.franken import (
     H1,
     Button,
@@ -27,7 +29,11 @@ from fastprize.auth import (
     verify_password,
     verify_unknown_password,
 )
+from fastprize.config import resend_api_key, resolve_public_base_url
+from fastprize.mail import send_password_reset_email
+from fastprize.store import PASSWORD_RESET_TTL, SetupClaimError
 from fastprize.ui import (
+    billing_anchor,
     brand_mark,
     document,
     emphasized,
@@ -37,12 +43,40 @@ from fastprize.ui import (
 )
 from fastprize.views.events import _selected_event
 
+logger = logging.getLogger(__name__)
+_RESET_MINUTES = int(PASSWORD_RESET_TTL.total_seconds() // 60)
+_SETUP_REJECTED = "This setup link is invalid or has already been used."
+_RESET_SENT = (
+    "If an account exists for that email, we sent a password reset link. "
+    f"It expires in {_RESET_MINUTES} minutes and works once."
+)
+_RESET_UNAVAILABLE = (
+    "Email password reset is not configured. On the server, run "
+    "fastprize-admin reset-password you@example.com."
+)
+_RESET_REJECTED = "This reset link is invalid or has expired."
+
 
 def _login_brand():
     return Div(brand_mark(), Span("FastPrize"), cls="brand login-brand")
 
 
-def _login_page(req: Request, message: str = "", next_path: str = "/"):
+def _csrf_matches(req: Request, supplied: str) -> bool:
+    session_token = req.session.get("csrf_token", "")
+    return bool(
+        session_token
+        and supplied
+        and len(session_token) == len(supplied)
+        and hmac.compare_digest(session_token, supplied)
+    )
+
+
+def _login_page(
+    req: Request,
+    message: str = "",
+    next_path: str = "/",
+    tone: str = "error",
+):
     if not req.app.state.store.admin_count():
         content = Card(
             H1("Admin setup required"),
@@ -54,7 +88,7 @@ def _login_page(req: Request, message: str = "", next_path: str = "/"):
     else:
         content = Card(
             H1("Admin sign in"),
-            status_banner(message, "error"),
+            status_banner(message, tone),
             Form(
                 Input(type="hidden", name="csrf", value=csrf_token(req)),
                 Input(type="hidden", name="next", value=next_path),
@@ -82,6 +116,7 @@ def _login_page(req: Request, message: str = "", next_path: str = "/"):
                 action="/login",
                 cls=(FlexT.block, FlexT.column, "gap-6"),
             ),
+            A("Forgot password?", href="/forgot-password"),
             cls="w-full max-w-md",
         )
     return document(
@@ -155,6 +190,7 @@ def _accounts_page(req: Request, message: str = "", tone: str = "info"):
     return document(
         "Admin accounts | FastPrize",
         page_header("Admins"),
+        P(billing_anchor(), "Manage billing for this FastPrize."),
         status_banner(message, tone),
         Card(
             Form(
@@ -191,6 +227,206 @@ def _accounts_page(req: Request, message: str = "", tone: str = "info"):
     )
 
 
+def _password_fields(prefix: str):
+    return (
+        Input(
+            id=f"{prefix}-password",
+            name="password",
+            type="password",
+            autocomplete="new-password",
+            required=True,
+            minlength="12",
+            placeholder="Password",
+            aria_label="Password",
+        ),
+        Input(
+            id=f"{prefix}-confirmation",
+            name="confirmation",
+            type="password",
+            autocomplete="new-password",
+            required=True,
+            minlength="12",
+            placeholder="Confirm password",
+            aria_label="Confirm password",
+        ),
+    )
+
+
+def _setup_page(
+    req: Request,
+    message: str = "",
+    token: str = "",
+    email: str = "",
+):
+    if token:
+        token_input = Input(type="hidden", name="token", value=token)
+    else:
+        token_input = Input(
+            id="setup-token",
+            name="token",
+            required=True,
+            autocomplete="off",
+            placeholder="Setup token",
+            aria_label="Setup token",
+        )
+    return document(
+        "Claim FastPrize",
+        Div(
+            _login_brand(),
+            Card(
+                H1("Claim this FastPrize"),
+                P(
+                    "Choose the admin email and password for this instance. "
+                    "This setup link works once."
+                ),
+                status_banner(message, "error"),
+                Form(
+                    Input(type="hidden", name="csrf", value=csrf_token(req)),
+                    token_input,
+                    Input(
+                        id="setup-email",
+                        name="email",
+                        type="email",
+                        autocomplete="username",
+                        required=True,
+                        value=email or None,
+                        placeholder="Email",
+                        aria_label="Email",
+                    ),
+                    *_password_fields("setup"),
+                    Button(
+                        "Save admin",
+                        type="submit",
+                        cls=(ButtonT.primary, "self-start"),
+                    ),
+                    method="post",
+                    action="/setup",
+                    cls=(FlexT.block, FlexT.column, "gap-6"),
+                ),
+                cls="w-full max-w-md",
+            ),
+            cls="login-intro",
+        ),
+        login_page=True,
+    )
+
+
+def _setup_closed_page(req: Request, message: str = ""):
+    return document(
+        "FastPrize setup",
+        Div(
+            _login_brand(),
+            Card(
+                H1("This FastPrize is already set up"),
+                status_banner(message, "error"),
+                P(A("Sign in", href="/login"), " with the admin account for this instance."),
+                cls="w-full max-w-md",
+            ),
+            cls="login-intro",
+        ),
+        login_page=True,
+    )
+
+
+def _forgot_page(req: Request, message: str = "", tone: str = "info"):
+    if resend_api_key():
+        body = (
+            status_banner(message, tone),
+            Form(
+                Input(type="hidden", name="csrf", value=csrf_token(req)),
+                Input(
+                    id="reset-email",
+                    name="email",
+                    type="email",
+                    autocomplete="username",
+                    required=True,
+                    placeholder="Email",
+                    aria_label="Email",
+                ),
+                Button(
+                    "Send reset link",
+                    type="submit",
+                    cls=(ButtonT.primary, "self-start"),
+                ),
+                method="post",
+                action="/forgot-password",
+                cls=(FlexT.block, FlexT.column, "gap-6"),
+            ),
+        )
+    else:
+        body = (P(_RESET_UNAVAILABLE),)
+    return document(
+        "Reset password | FastPrize",
+        Div(
+            _login_brand(),
+            Card(
+                H1("Reset password"),
+                *body,
+                A("Back to sign in", href="/login"),
+                cls="w-full max-w-md",
+            ),
+            cls="login-intro",
+        ),
+        login_page=True,
+    )
+
+
+def _reset_page(req: Request, message: str = "", token: str = ""):
+    form = ""
+    if token:
+        form = Form(
+            Input(type="hidden", name="csrf", value=csrf_token(req)),
+            Input(type="hidden", name="token", value=token),
+            *_password_fields("reset"),
+            Button(
+                "Update password",
+                type="submit",
+                cls=(ButtonT.primary, "self-start"),
+            ),
+            method="post",
+            action="/reset-password",
+            cls=(FlexT.block, FlexT.column, "gap-6"),
+        )
+    return document(
+        "Choose a new password | FastPrize",
+        Div(
+            _login_brand(),
+            Card(
+                H1("Choose a new password"),
+                status_banner(message, "error"),
+                form,
+                cls="w-full max-w-md",
+            ),
+            cls="login-intro",
+        ),
+        login_page=True,
+    )
+
+
+def _deliver_password_reset(store, req: Request, email: str) -> None:
+    if "@" not in login_rate_subject(email):
+        return
+    now = time.time()
+    if store.password_reset_is_limited(email, now):
+        return
+    store.record_password_reset_attempt(email, now)
+    admin = store.get_admin_by_email(email)
+    if admin is None or not admin["enabled"]:
+        return
+    base = resolve_public_base_url(req)
+    if not base:
+        logger.warning(
+            "Password reset email skipped; no safe public base URL is configured"
+        )
+        return
+    token, idempotency_key = store.issue_password_reset(admin["id"])
+    send_password_reset_email(
+        to=admin["email"],
+        reset_url=f"{base}/reset-password?token={quote(token)}",
+        idempotency_key=idempotency_key,
+    )
+
+
 def register_routes(rt, store):
     @rt("/login", methods=["GET", "POST"])
     def login(
@@ -203,6 +439,13 @@ def register_routes(rt, store):
         if req.method == "GET":
             if admin_from_request(req):
                 return RedirectResponse("/", status_code=303)
+            if req.query_params.get("reset") == "1":
+                return _login_page(
+                    req,
+                    "Password updated. Sign in with your new password.",
+                    is_safe_return_path(next),
+                    tone="info",
+                )
             return _login_page(req, next_path=is_safe_return_path(next))
 
         session_token = req.session.get("csrf_token", "")
@@ -296,3 +539,88 @@ def register_routes(rt, store):
         if not store.update_admin_password(admin_id, password_hash):
             return _accounts_page(req, "Admin account not found.", "error")
         return _accounts_page(req, "Password reset. That account must sign in again.")
+
+    @rt("/setup", methods=["GET", "POST"])
+    def setup_claim(
+        req: Request,
+        token: str = "",
+        email: str = "",
+        password: str = "",
+        confirmation: str = "",
+        csrf: str = "",
+    ):
+        if store.setup_status() != "pending":
+            if store.admin_count() == 0:
+                return RedirectResponse("/login", status_code=303)
+            if req.method == "POST":
+                return _setup_closed_page(req, _SETUP_REJECTED)
+            return _setup_closed_page(req)
+        if req.method == "GET":
+            return _setup_page(req, token=token)
+        if not _csrf_matches(req, csrf):
+            return _setup_page(
+                req,
+                "Could not claim this instance. Try again.",
+                token=token,
+                email=email,
+            )
+        if password != confirmation:
+            return _setup_page(
+                req,
+                "Passwords did not match.",
+                token=token,
+                email=email,
+            )
+        try:
+            password_hash = hash_password(password)
+        except ValueError as error:
+            return _setup_page(req, str(error), token=token, email=email)
+        try:
+            admin = store.claim_setup(token, email, password_hash)
+        except SetupClaimError:
+            return _setup_page(req, _SETUP_REJECTED, token=token, email=email)
+        except ValueError as error:
+            return _setup_page(req, str(error), token=token, email=email)
+        establish_session(req.session, admin)
+        return RedirectResponse("/", status_code=303)
+
+    @rt("/forgot-password", methods=["GET", "POST"])
+    def forgot_password(req: Request, email: str = "", csrf: str = ""):
+        if req.method == "GET" or not resend_api_key():
+            return _forgot_page(req)
+        if not _csrf_matches(req, csrf):
+            return _forgot_page(
+                req,
+                "Could not send a reset link. Try again.",
+                "error",
+            )
+        _deliver_password_reset(store, req, email)
+        return _forgot_page(req, _RESET_SENT)
+
+    @rt("/reset-password", methods=["GET", "POST"])
+    def reset_password(
+        req: Request,
+        token: str = "",
+        password: str = "",
+        confirmation: str = "",
+        csrf: str = "",
+    ):
+        if req.method == "GET":
+            if not token:
+                return _reset_page(req, _RESET_REJECTED)
+            return _reset_page(req, token=token)
+        if not _csrf_matches(req, csrf):
+            return _reset_page(
+                req,
+                "Could not update the password. Try again.",
+                token=token,
+            )
+        if password != confirmation:
+            return _reset_page(req, "Passwords did not match.", token=token)
+        try:
+            password_hash = hash_password(password)
+        except ValueError as error:
+            return _reset_page(req, str(error), token=token)
+        if not store.reset_password_with_token(token, password_hash):
+            return _reset_page(req, _RESET_REJECTED)
+        return RedirectResponse("/login?reset=1", status_code=303)

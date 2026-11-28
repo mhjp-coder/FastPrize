@@ -66,11 +66,16 @@ def require_admin(store, req, sess):
 def auth_beforeware(store):
     public_paths = (
         "/login",
+        "/setup",
+        "/forgot-password",
+        "/reset-password",
+        "/health",
         "/events/\\d+/display",
         "/events/\\d+/display/latest-fragment",
         "/events/\\d+/display/latest",
         "/assets/.*",
     )
+    setup_redirect_paths = {"/login", "/forgot-password", "/reset-password"}
 
     def display_slug(path: str) -> str | None:
         parts = [part for part in path.split("/") if part]
@@ -110,8 +115,14 @@ def auth_beforeware(store):
             ) and not same_origin(req):
                 raise HTTPException(status_code=403, detail="Request rejected")
 
+        if re.fullmatch(r"/health|/assets/.*", req.url.path):
+            return None
+        if store.setup_is_pending() and req.url.path in setup_redirect_paths:
+            return RedirectResponse("/setup", status_code=303)
         if is_public_path(req.url.path):
             return None
+        if store.setup_is_pending():
+            return RedirectResponse("/setup", status_code=303)
         admin = require_admin(store, req, sess)
         if isinstance(admin, RedirectResponse):
             return admin

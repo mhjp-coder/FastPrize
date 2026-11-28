@@ -4,9 +4,11 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from fasthtml.common import Beforeware, fast_app, serve
+from starlette.responses import JSONResponse
 from starlette.staticfiles import StaticFiles
 
-from fastprize.auth import auth_beforeware, hash_password
+from fastprize.auth import auth_beforeware
+from fastprize.instance import prepare_instance
 from fastprize.store import PrizeDrawStore, get_database_path
 from fastprize.ui import EVENT_SELECTION_COOKIE
 from fastprize.views import auth, draw, entrants, events, history, imports, prizes
@@ -77,14 +79,7 @@ def create_app(db_path: str | Path | None = None):
         raise RuntimeError(
             "FASTPRIZE_COOKIE_SECURE requires FASTPRIZE_SESSION_SECRET with at least 32 characters"
         )
-    bootstrap_email = os.environ.get("FASTPRIZE_ADMIN_EMAIL", "").strip()
-    bootstrap_password = os.environ.get("FASTPRIZE_ADMIN_PASSWORD", "")
-    if bool(bootstrap_email) != bool(bootstrap_password):
-        raise RuntimeError(
-            "Set both FASTPRIZE_ADMIN_EMAIL and FASTPRIZE_ADMIN_PASSWORD to bootstrap an admin"
-        )
-    if bootstrap_email and not store.admin_count():
-        store.bootstrap_admin(bootstrap_email, hash_password(bootstrap_password))
+    prepare_instance(store)
 
     app, rt = fast_app(
         title="FastPrize",
@@ -103,6 +98,16 @@ def create_app(db_path: str | Path | None = None):
     app.state.store = store
     asset_directory = Path(__file__).resolve().parents[2] / "assets"
     app.mount("/assets", StaticFiles(directory=asset_directory), name="assets")
+
+    @rt("/health")
+    def health_check():
+        try:
+            ready = store.database_ready()
+        except Exception:  # noqa: BLE001 - any readiness failure is unavailable
+            ready = False
+        if not ready:
+            return JSONResponse({"status": "unavailable"}, status_code=503)
+        return JSONResponse({"status": "ok"})
 
     for register_routes in (
         auth.register_routes,

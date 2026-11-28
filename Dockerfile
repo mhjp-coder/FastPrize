@@ -18,6 +18,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 COPY src/ ./src/
 COPY assets/ ./assets/
+COPY dummy_data/ ./dummy_data/
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev \
     && groupadd --gid 10001 fastprize \
@@ -34,6 +35,6 @@ RUN printf '%s\n' "$APP_VERSION" > /app/VERSION \
 USER fastprize
 EXPOSE 5001
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
-    CMD python -c "from urllib.request import urlopen; assert urlopen('http://127.0.0.1:5001/login', timeout=3).status == 200"
+    CMD python -c "from urllib.request import urlopen; response = urlopen('http://127.0.0.1:5001/health', timeout=3); assert response.status == 200 and b'\"ok\"' in response.read()"
 
 CMD ["uvicorn", "fastprize.app:app", "--host", "0.0.0.0", "--port", "5001", "--workers", "1", "--proxy-headers"]

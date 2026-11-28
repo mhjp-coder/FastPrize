@@ -18,5 +18,4 @@ build
 dist
 wheels
 tests
-dummy_data
 assets/live-display-concepts

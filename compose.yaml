@@ -13,6 +13,13 @@ services:
       FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-}
       FASTPRIZE_ADMIN_EMAIL: ${FASTPRIZE_ADMIN_EMAIL:-}
       FASTPRIZE_ADMIN_PASSWORD: ${FASTPRIZE_ADMIN_PASSWORD:-}
+      SETUP_TOKEN: ${SETUP_TOKEN:-}
+      SETUP_TOKEN_HASH: ${SETUP_TOKEN_HASH:-}
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      RESEND_FROM: "${RESEND_FROM:-FastPrize <hello@fastprize.net>}"
+      APP_BASE_URL: ${APP_BASE_URL:-}
+      SEED_DUMMY_DATA: ${SEED_DUMMY_DATA:-}
+      BILLING_URL: ${BILLING_URL:-https://fastprize.net/billing}
     volumes:
       - fastprize-data:/data
     read_only: true
