@@ -30,7 +30,7 @@ docker compose up -d --build
 docker compose logs -f app
 ```
 
-For a GitHub Container Registry image, set `FASTPRIZE_IMAGE` in `.env` to `ghcr.io/OWNER/REPOSITORY:TAG`, authenticate Docker to `ghcr.io` if the package is private, then run `docker compose pull` followed by `docker compose up -d --no-build`. The GitHub Actions workflow tests and builds pull requests without publishing. Pushes to `main` and version tags (`v*`) publish images; use the version or SHA tag to pin a deployment and roll back by restoring the previous tag.
+Releases are built on loki from a clean `main` checkout: `git fetch origin --tags && git checkout main && git merge --ff-only origin/main && scripts/build-image`. That pushes `ghcr.io/mhjp-coder/fastprize:<YY-MM.N>` and updates `:latest`. Production pins the numbered tag with `IMAGE_TAG` and never sets `IMAGE_TAG=latest`. Set `FASTPRIZE_IMAGE` to `ghcr.io/mhjp-coder/fastprize:<YY-MM.N>`, authenticate Docker to `ghcr.io` if the package is private, then run `docker compose pull` and `docker compose up -d --no-build`. GitHub Actions only tests and builds the image. It does not publish. See [DEPLOY.md](DEPLOY.md).
 
 Configure the reverse proxy to replace, not append untrusted values to, `X-Forwarded-For` and `X-Forwarded-Proto`. Set `FORWARDED_ALLOW_IPS` to the exact proxy source IP address(es) as seen by the app container; do not use `*` on a network reachable by untrusted clients. Keep `FASTPRIZE_COOKIE_SECURE=true` when HTTPS terminates at the proxy. The public projector display and its read-only result polling URL remain accessible to anyone with their URL.
 
