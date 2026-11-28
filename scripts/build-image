@@ -1,0 +1,71 @@
+#!/bin/sh
+# Tag the current commit with the next YY-MM.N version and publish that image.
+set -eu
+
+root=$(CDPATH='' cd -- "$(dirname "$0")/.." && pwd)
+cd "$root"
+
+# A shell started before this user joined the docker group cannot open the socket.
+if ! docker info >/dev/null 2>&1 && [ -z "${BUILD_IMAGE_DOCKER_GROUP:-}" ]; then
+  user=$(id -un)
+  members=$(getent group docker 2>/dev/null | awk -F: '{print $4}')
+  case ",${members}," in
+    *,"${user}",*)
+      export BUILD_IMAGE_DOCKER_GROUP=1
+      # dash printf has no %q. Single-quote the path for the newgrp shell.
+      quoted=$(printf '%s\n' "$0" | sed "s/'/'\\\\''/g; 1s/^/'/; \$s/\$/'/")
+      exec newgrp docker <<EOF
+exec $quoted
+EOF
+      ;;
+  esac
+fi
+
+if [ -n "$(git status --porcelain)" ]; then
+  echo "Commit or stash changes before building a release image." >&2
+  exit 1
+fi
+
+branch=$(git branch --show-current)
+if [ "$branch" != "main" ]; then
+  echo "Release images are built only on main (current branch: ${branch:-detached})." >&2
+  exit 1
+fi
+
+if ! docker info >/dev/null 2>&1; then
+  echo "Docker is not available. Start Docker and run this script again." >&2
+  exit 1
+fi
+
+config=${HOME}/.docker/config.json
+if [ ! -f "$config" ] || ! grep -q 'ghcr.io' "$config"; then
+  echo "This machine is not logged in to ghcr.io. Run: docker login ghcr.io" >&2
+  exit 1
+fi
+
+version=$("$root/scripts/image-version")
+remote=$(git remote get-url origin)
+repository=$(printf '%s\n' "$remote" | sed -E 's#.*github.com[:/]([^/]+/[^.]+)(\.git)?$#\1#' | tr '[:upper:]' '[:lower:]')
+image="ghcr.io/${repository}"
+
+if git rev-parse -q --verify "refs/tags/${version}" >/dev/null; then
+  echo "Tag ${version} already exists." >&2
+  exit 1
+fi
+
+echo "Release ${image}:${version}"
+
+docker build \
+  --build-arg "APP_VERSION=${version}" \
+  -t "${image}:${version}" \
+  -t "${image}:latest" \
+  "$root"
+docker push "${image}:${version}"
+docker push "${image}:latest"
+
+git tag -a "$version" -m "Release ${version}"
+git push origin HEAD
+git push origin "$version"
+
+echo "Pushed ${image}:${version}, ${image}:latest, and tag ${version}."
+echo "Production pins ${image}:${version}. Do not set IMAGE_TAG=latest."

@@ -1,0 +1,22 @@
+#!/bin/sh
+# Print the next image version for this month: YY-MM.N, for example 26-11.1.
+set -eu
+
+root=$(CDPATH='' cd -- "$(dirname "$0")/.." && pwd)
+cd "$root"
+
+prefix=$(date +%y-%m)
+git fetch --tags --quiet origin
+
+highest=$(
+  git tag -l "${prefix}.*" \
+    | awk -F. 'NF == 2 && $2 ~ /^[0-9]+$/ { print $2 }' \
+    | sort -n \
+    | tail -n 1
+)
+
+if [ -z "$highest" ]; then
+  echo "${prefix}.1"
+else
+  echo "${prefix}.$((highest + 1))"
+fi

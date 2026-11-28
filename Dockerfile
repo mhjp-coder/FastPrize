@@ -25,6 +25,12 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     && mkdir /data \
     && chown fastprize:fastprize /data
 
+ARG APP_VERSION=dev
+LABEL org.opencontainers.image.source="https://github.com/mhjp-coder/FastPrize" \
+      org.opencontainers.image.version="${APP_VERSION}"
+RUN printf '%s\n' "$APP_VERSION" > /app/VERSION \
+    && chown fastprize:fastprize /app/VERSION
+
 USER fastprize
 EXPOSE 5001
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
